@@ -1,6 +1,10 @@
 # Assessment model
 
-The cognitive baseline covers abstract reasoning, deductive logic, numerical reasoning, verbal reasoning, visual-spatial reasoning, working memory, and processing speed. The demo includes reviewed baseline examples across each domain, with memory and speed represented as distinct task types.
+The cognitive baseline covers abstract reasoning, deductive logic, numerical reasoning, verbal reasoning, visual-spatial reasoning, working memory, and processing speed. The pilot bank contains 140 original reviewed-style items: 20 items per domain, with memory and speed represented as distinct task types.
+
+The default complete form selects 8 items from each domain (56 questions total) without replacement, then shuffles the combined order with a secure random source. The quick form selects 2 items per domain (14 total). A new session receives a new form; item IDs, answer keys, and explanations remain server-side.
+
+The `medium_hard` label is a content target, not an established psychometric result. Difficulty, discrimination, fairness, reliability, and norms require real pilot responses and review.
 
 Each assessment version has an immutable item version, scoring model version, and (in future) a norm version. An item version cannot be edited after scored responses exist; a new version is created instead.
 

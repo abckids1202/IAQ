@@ -8,6 +8,7 @@ connecting PostgreSQL.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import random
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -16,9 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
+from .question_bank import QUESTION_BANK, bank_counts, bank_is_ready
 
 app = FastAPI(title="IAQ API", version="0.1.0", description="Experimental educational profile API")
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):517[0-9]$", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 
@@ -31,6 +33,9 @@ ITEMS: Dict[str, Dict[str, Any]] = {
     "memory-01": {"id": "memory-01", "domain": "working_memory", "type": "memory", "prompt": "Remember this sequence, then select it in the same order.", "options": ["7-2-9-4", "7-9-2-4", "2-7-4-9", "9-4-7-2"], "answer": "7-2-9-4", "status": "ACTIVE"},
     "speed-01": {"id": "speed-01", "domain": "processing_speed", "type": "speed", "prompt": "Find the only pair of matching symbols.", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
 }
+# The reviewed bank is the source of truth. The small legacy entries above are
+# retained as a migration note for the first demo build.
+ITEMS = {item["id"]: item for item in QUESTION_BANK}
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
@@ -47,7 +52,7 @@ MAJORS = [
 
 class SessionCreate(BaseModel):
     assessment_version: str = "IAQ-COG-0.3"
-    mode: str = Field(default="quick", pattern="^(quick|complete)$")
+    mode: str = Field(default="complete", pattern="^(quick|complete)$")
 
 
 class ResponseCreate(BaseModel):
@@ -74,7 +79,23 @@ class RiaSecPayload(BaseModel):
 
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Never return answer keys to the browser."""
-    return {key: value for key, value in item.items() if key not in {"answer"}}
+    return {key: value for key, value in item.items() if key not in {"answer", "explanation"}}
+
+
+def create_randomized_form(mode: str) -> List[str]:
+    """Create a balanced, no-repeat form from the reviewed question bank."""
+    if not bank_is_ready():
+        raise HTTPException(500, "Question bank is not ready")
+    per_domain = 8 if mode == "complete" else 2
+    pools: Dict[str, List[str]] = {domain: [] for domain in DOMAINS}
+    for item in ITEMS.values():
+        pools[item["domain"]].append(item["id"])
+    rng = random.SystemRandom()
+    selected: List[str] = []
+    for domain in DOMAINS:
+        selected.extend(rng.sample(pools[domain], per_domain))
+    rng.shuffle(selected)
+    return selected
 
 
 @app.get("/health")
@@ -89,7 +110,7 @@ def me() -> Dict[str, Any]:
 
 @app.get("/assessments")
 def assessments() -> List[Dict[str, Any]]:
-    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "estimated_minutes": 12}]
+    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "estimated_minutes": 24}]
 
 
 @app.post("/assessments/{assessment_id}/sessions")
@@ -97,7 +118,7 @@ def create_session(assessment_id: str, payload: SessionCreate) -> Dict[str, Any]
     if assessment_id != "iaq-cognitive":
         raise HTTPException(404, "Assessment version unavailable")
     session_id = str(uuid4())
-    SESSIONS[session_id] = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "status": "created", "responses": {}, "created_at": NOW(), "user_id": "demo-student"}
+    SESSIONS[session_id] = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "status": "created", "responses": {}, "item_order": create_randomized_form(payload.mode), "created_at": NOW(), "user_id": "demo-student"}
     return {"id": session_id, "assessment_version": payload.assessment_version, "status": "created"}
 
 
@@ -106,7 +127,7 @@ def get_session(session_id: str) -> Dict[str, Any]:
     session = SESSIONS.get(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    return {key: value for key, value in session.items() if key != "responses"} | {"answered_count": len(session["responses"])}
+    return {key: value for key, value in session.items() if key not in {"responses", "item_order"}} | {"answered_count": len(session["responses"]), "question_count": len(session["item_order"])}
 
 
 @app.post("/sessions/{session_id}/start")
@@ -116,7 +137,7 @@ def start_session(session_id: str) -> Dict[str, Any]:
         raise HTTPException(404, "Session not found")
     session["status"] = "in_progress"
     session["started_at"] = NOW()
-    return {"status": session["status"], "next_item": public_item(next(iter(ITEMS.values())))}
+    return {"status": session["status"], "next_item": public_item(ITEMS[session["item_order"][0]])}
 
 
 @app.get("/sessions/{session_id}/next-item")
@@ -124,9 +145,9 @@ def next_item(session_id: str) -> Dict[str, Any]:
     session = SESSIONS.get(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    for item in ITEMS.values():
-        if item["id"] not in session["responses"]:
-            return public_item(item)
+    for item_id in session["item_order"]:
+        if item_id not in session["responses"]:
+            return public_item(ITEMS[item_id])
     return {"complete": True}
 
 
@@ -138,6 +159,10 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
     item = ITEMS.get(payload.item_id)
     if not item:
         raise HTTPException(422, "Item is unavailable")
+    if payload.item_id not in session["item_order"]:
+        raise HTTPException(422, "Item is not part of this randomized form")
+    if payload.answer not in item["options"]:
+        raise HTTPException(422, "Answer option is unavailable")
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     session["responses"][payload.item_id] = {"item_id": payload.item_id, "answer": payload.answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "data_origin": "REAL_PILOT"}
@@ -254,3 +279,17 @@ def admin_items(status: Optional[str] = Query(default=None), domain: Optional[st
     if domain:
         items = [item for item in items if item["domain"] == domain]
     return {"items": [public_item(item) for item in items], "total": len(items)}
+
+
+@app.get("/admin/question-bank/summary")
+def question_bank_summary() -> Dict[str, Any]:
+    """Expose safe operational metadata for the question-studio dashboard."""
+    return {
+        "total": len(ITEMS),
+        "minimum_per_domain": 20,
+        "counts": bank_counts(),
+        "ready": bank_is_ready(),
+        "form_sizes": {"quick": 14, "complete": 56},
+        "difficulty_label": "medium_hard",
+        "lifecycle": "PILOT",
+    }

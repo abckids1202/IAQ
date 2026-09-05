@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
+import { finishAssessment, saveAndGetNext, startRandomizedAssessment } from './api'
 import type { Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
@@ -102,7 +103,7 @@ function Home({ profile, savedMajors }: { profile: Profile; savedMajors: string[
 function EvidenceRow({ label, value, state }: { label: string; value: string; state: string }) { return <div className="evidence-row"><span className={`state-mark ${state}`}>{state === 'good' ? '✓' : '○'}</span><span>{label}</span><strong>{value}</strong></div> }
 
 function AssessLanding() {
-  return <div className="page"><PageIntro eyebrow="Take a test / About 12 minutes" title={<>Take a test.<br /><em>Learn about yourself.</em></>} body="Try a short set of thinking and attention tasks. Find a quiet spot, take your time, and use the result as a starting point." action={<Link to="/assess/session" className="button primary">Start my test <span>→</span></Link>} /><div className="notice-bar subtle"><span className="notice-icon">⌁</span><span><strong>Good to know.</strong> This is an experimental educational profile. We do not use your camera or microphone, and you can pause at any time.</span></div><div className="assessment-overview"><section className="assessment-hero"><div className="assessment-index">01 <span>/ 07</span></div><h2>Seven ways to see<br /><em>how you think.</em></h2><p>We look at a few different kinds of thinking so one number never has to tell the whole story.</p><Link to="/methodology" className="text-button light">See how it works ↗</Link></section><div className="domain-list">{domains.map((domain, index) => <div className="domain-row" key={domain}><span className="domain-no">0{index + 1}</span><div><strong>{domain}</strong><span>{domainMeta[domain].description}</span></div><span className={`domain-tag ${domainMeta[domain].tone}`}>{index === 5 ? 'memory game' : index === 6 ? 'quick task' : '8 questions'}</span></div>)}</div></div></div>
+  return <div className="page"><PageIntro eyebrow="Take a test / About 20–25 minutes" title={<>Take a test.<br /><em>Learn about yourself.</em></>} body="Try 56 medium-to-hard thinking and attention tasks. Find a quiet spot, take your time, and use the result as a starting point." action={<Link to="/assess/session" className="button primary">Start my test <span>→</span></Link>} /><div className="notice-bar subtle"><span className="notice-icon">⌁</span><span><strong>Good to know.</strong> This is an experimental educational profile. We do not use your camera or microphone, and you can pause at any time.</span></div><div className="assessment-overview"><section className="assessment-hero"><div className="assessment-index">01 <span>/ 07</span></div><h2>Seven ways to see<br /><em>how you think.</em></h2><p>We look at a few different kinds of thinking so one number never has to tell the whole story.</p><Link to="/methodology" className="text-button light">See how it works ↗</Link></section><div className="domain-list">{domains.map((domain, index) => <div className="domain-row" key={domain}><span className="domain-no">0{index + 1}</span><div><strong>{domain}</strong><span>{domainMeta[domain].description}</span></div><span className={`domain-tag ${domainMeta[domain].tone}`}>{index === 5 ? 'memory game' : index === 6 ? 'quick task' : '8 questions'}</span></div>)}</div></div></div>
 }
 
 function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number>) => void }) {
@@ -111,14 +112,60 @@ function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [paused, setPaused] = useState(false)
   const [startedAt] = useState(Date.now())
-  const question = questions[index]
+  const [apiSession, setApiSession] = useState<string | null>(null)
+  const [apiQuestion, setApiQuestion] = useState<Question | null>(null)
+  const [usingApi, setUsingApi] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [apiError, setApiError] = useState('')
+  useEffect(() => {
+    let alive = true
+    startRandomizedAssessment().then(({ sessionId, question: first }) => {
+      if (!alive) return
+      setApiSession(sessionId)
+      setApiQuestion(first)
+      setUsingApi(true)
+      setLoading(false)
+    }).catch(() => {
+      if (!alive) return
+      setLoading(false)
+    })
+    return () => { alive = false }
+  }, [])
+  const question = usingApi && apiQuestion ? apiQuestion : questions[index]
   const selected = answers[question.id]
   const answered = Object.keys(answers).length
-  const progress = Math.round((answered / questions.length) * 100)
+  const totalQuestions = usingApi ? 56 : questions.length
+  const progress = Math.round((answered / totalQuestions) * 100)
   const choose = (option: string) => setAnswers((current) => ({ ...current, [question.id]: option }))
-  const next = () => { if (index === questions.length - 1) { onComplete(initialScores); navigate('/results') } else setIndex((i) => i + 1) }
-  const restart = () => { setIndex(0); setAnswers({}); setPaused(false) }
-  return <div className="assessment-screen"><header className="assessment-header"><Link to="/" className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></Link><div className="assessment-progress"><span>IAQ Cognitive Profile</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(index + 1).padStart(2, '0')} / {questions.length}</span></div><button className="text-button" onClick={() => setPaused(true)}>Save & pause</button></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Section {String(index + 1).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? 'Answer saved locally' : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected} onClick={next}>{index === questions.length - 1 ? 'See profile' : 'Continue'} <span>→</span></button></div><div className="assessment-footnote">Questions are fixed and reviewed for this pilot build. Responses are scored server-side in production; demo data remains local to this browser.</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {questions.length} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart demo session</button></div></div>}</div>
+  const next = async () => {
+    if (!selected || submitting) return
+    if (usingApi && apiSession) {
+      setSubmitting(true)
+      setApiError('')
+      try {
+        const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1)
+        setAnswers((current) => ({ ...current, [question.id]: selected }))
+        if (nextQuestion) setApiQuestion(nextQuestion)
+        else {
+          await finishAssessment(apiSession)
+          onComplete(initialScores)
+          navigate('/results')
+        }
+      } catch {
+        setApiError('We could not save this answer. Check the connection and try again.')
+      } finally {
+        setSubmitting(false)
+      }
+    } else if (index === questions.length - 1) {
+      onComplete(initialScores)
+      navigate('/results')
+    } else setIndex((i) => i + 1)
+  }
+  const restart = () => { setIndex(0); setAnswers({}); setPaused(false); setApiError('') }
+  if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>We are choosing a balanced mix from the IAQ question bank.</p></div></main></div>
+  const displayNumber = usingApi ? (answers[question.id] ? answered : answered + 1) : index + 1
+  return <div className="assessment-screen"><header className="assessment-header"><Link to="/" className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></Link><div className="assessment-progress"><span>IAQ Cognitive Profile</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><button className="text-button" onClick={() => setPaused(true)}>Save & pause</button></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={usingApi || index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? (usingApi ? 'Ready to save' : 'Answer saved locally') : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected || submitting} onClick={next}>{submitting ? 'Saving…' : displayNumber === totalQuestions ? 'See profile' : 'Continue'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error">{apiError}</div>}<div className="assessment-footnote">{usingApi ? '56 questions / 8 from each thinking area / randomized for this attempt.' : 'Demo fallback / 14 questions / start the IAQ API for a randomized 56-question form.'}</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {totalQuestions} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart this test</button></div></div>}</div>
 }
 
 function Compass({ savedMajors, toggleMajor }: { savedMajors: string[]; toggleMajor: (name: string) => void }) {

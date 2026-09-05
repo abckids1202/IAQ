@@ -8,6 +8,7 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 
 - React + TypeScript + Vite product shell with editorial dashboard UI.
 - Student flow: a resumable seven-domain cognitive session, results, Compass, Tracker, evidence prompts, saved majors, and printable report.
+- Question bank: 140 original medium-hard pilot items, with 20 items in each intelligence aspect. A complete test selects 8 fresh items per aspect (56 total) and randomizes their order for every session; the quick mode selects 2 per aspect (14 total).
 - Counselor workspace with consent-aware student states and anonymized cohort summaries.
 - Administrator item studio with lifecycle states, item health flags, response counts, and protected answer-key preview.
 - FastAPI service boundary with server-side response scoring, idempotent response submission, session events, RIASEC scoring, transparent major matching, tracker endpoints, and role-oriented endpoints.
@@ -42,7 +43,7 @@ docker compose up -d postgres
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/001_initial.sql
 ```
 
-The frontend demo is intentionally usable without the backend. Configure `VITE_API_BASE_URL` when connecting the UI to the service.
+The frontend connects to the backend for randomized question sessions. If the API is unavailable, it falls back to the small local demo set so the interface remains previewable. Configure `VITE_API_BASE_URL` when connecting the UI to a different service.
 
 ## Verify
 

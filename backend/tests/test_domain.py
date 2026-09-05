@@ -1,4 +1,7 @@
+from collections import Counter
+
 from app.domain import classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
+from app.main import ITEMS, create_randomized_form, public_item
 
 
 def test_domain_scoring_is_versioned_and_provisional():
@@ -24,3 +27,19 @@ def test_quality_flags_rapid_and_interruptions():
     assert result["status"] == "low"
     assert "rapid_guessing_possible" in result["warnings"]
     assert "interruptions" in result["warnings"]
+
+
+def test_question_bank_has_balanced_complete_forms_and_hides_keys():
+    form = create_randomized_form("complete")
+    assert len(ITEMS) == 140
+    assert len(form) == 56
+    assert len(set(form)) == 56
+    assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
+    item = public_item(ITEMS[form[0]])
+    assert "answer" not in item
+    assert "explanation" not in item
+
+
+def test_question_bank_randomizes_between_sessions():
+    forms = {tuple(create_randomized_form("complete")) for _ in range(5)}
+    assert len(forms) > 1
