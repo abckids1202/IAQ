@@ -41,7 +41,16 @@ Optional PostgreSQL:
 ```bash
 docker compose up -d postgres
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/001_initial.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/002_question_bank_contract.sql
+cd backend
+$env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # PowerShell
+python -m app.seed
 ```
+
+The seed command is idempotent. It creates the 140 reviewed item records and
+their version-1 answer keys in PostgreSQL; version conflicts are not silently
+overwritten. Without `IAQ_DATABASE_URL`, `python -m app.seed` prints the bank
+summary used by the dependency-light local API.
 
 The frontend connects to the backend for randomized question sessions. If the API is unavailable, it falls back to the small local demo set so the interface remains previewable. Configure `VITE_API_BASE_URL` when connecting the UI to a different service.
 

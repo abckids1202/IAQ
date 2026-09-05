@@ -162,7 +162,24 @@ function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number
       navigate('/results')
     } else setIndex((i) => i + 1)
   }
-  const restart = () => { setIndex(0); setAnswers({}); setPaused(false); setApiError('') }
+  const restart = async () => {
+    setIndex(0)
+    setAnswers({})
+    setPaused(false)
+    setApiError('')
+    if (usingApi) {
+      setLoading(true)
+      try {
+        const { sessionId, question: first } = await startRandomizedAssessment()
+        setApiSession(sessionId)
+        setApiQuestion(first)
+      } catch {
+        setUsingApi(false)
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
   if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>We are choosing a balanced mix from the IAQ question bank.</p></div></main></div>
   const displayNumber = usingApi ? (answers[question.id] ? answered : answered + 1) : index + 1
   return <div className="assessment-screen"><header className="assessment-header"><Link to="/" className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></Link><div className="assessment-progress"><span>IAQ Cognitive Profile</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><button className="text-button" onClick={() => setPaused(true)}>Save & pause</button></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={usingApi || index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? (usingApi ? 'Ready to save' : 'Answer saved locally') : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected || submitting} onClick={next}>{submitting ? 'Saving…' : displayNumber === totalQuestions ? 'See profile' : 'Continue'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error">{apiError}</div>}<div className="assessment-footnote">{usingApi ? '56 questions / 8 from each thinking area / randomized for this attempt.' : 'Demo fallback / 14 questions / start the IAQ API for a randomized 56-question form.'}</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {totalQuestions} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart this test</button></div></div>}</div>
