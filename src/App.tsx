@@ -28,59 +28,89 @@ function App() {
   }
 
   return <Routes>
-    <Route path="/" element={<AppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></AppShell>} />
-    <Route path="/assess" element={<AppShell profile={profile}><AssessLanding /></AppShell>} />
+    <Route path="/welcome" element={<PublicSite />} />
+    <Route path="/" element={<StudentAppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></StudentAppShell>} />
+    <Route path="/assess" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
     <Route path="/assess/session" element={<Assessment onComplete={completeAssessment} />} />
-    <Route path="/compass" element={<AppShell profile={profile}><Compass savedMajors={savedMajors} toggleMajor={toggleMajor} /></AppShell>} />
-    <Route path="/tracker" element={<AppShell profile={profile}><Tracker savedMajors={savedMajors} /></AppShell>} />
-    <Route path="/results" element={<AppShell profile={profile}><Results profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /></AppShell>} />
-    <Route path="/school" element={<AppShell profile={{ ...profile, role: 'counselor' }}><School /></AppShell>} />
-    <Route path="/admin" element={<AppShell profile={{ ...profile, role: 'admin' }}><Admin /></AppShell>} />
-    <Route path="/methodology" element={<AppShell profile={profile}><Methodology /></AppShell>} />
-    <Route path="/privacy" element={<AppShell profile={profile}><Privacy /></AppShell>} />
+    <Route path="/compass" element={<StudentAppShell profile={profile}><Compass savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
+    <Route path="/tracker" element={<StudentAppShell profile={profile}><Tracker savedMajors={savedMajors} /></StudentAppShell>} />
+    <Route path="/results" element={<StudentAppShell profile={profile}><Results profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
+    <Route path="/school" element={<CounselorAppShell><School /></CounselorAppShell>} />
+    <Route path="/admin" element={<AdminAppShell><Admin /></AdminAppShell>} />
+    <Route path="/methodology" element={<StudentAppShell profile={profile}><Methodology /></StudentAppShell>} />
+    <Route path="/privacy" element={<StudentAppShell profile={profile}><Privacy /></StudentAppShell>} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>
 }
 
-function AppShell({ children, profile }: { children: React.ReactNode; profile: Profile }) {
+const studentNav = [
+  { to: '/', label: 'Overview', icon: '⌂', end: true },
+  { to: '/assess', label: 'Assessments', icon: '◈' },
+  { to: '/compass', label: 'Major Explorer', icon: '✦' },
+  { to: '/tracker', label: 'IAQ Tracker', icon: '◒' },
+  { to: '/results', label: 'Reports', icon: '↗' }
+]
+
+function pageName(pathname: string) {
+  const names: Record<string, string> = { '/': 'Overview', '/assess': 'Assessments', '/compass': 'Major Explorer', '/tracker': 'IAQ Tracker', '/results': 'Reports', '/school': 'Overview', '/admin': 'Overview', '/methodology': 'Help & Methodology', '/privacy': 'Privacy' }
+  return names[pathname] || pathname.slice(1).replaceAll('-', ' ')
+}
+
+function Brand({ to = '/' }: { to?: string }) {
+  return <Link to={to} className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></Link>
+}
+
+function WorkspaceSwitcher({ active }: { active: string }) {
+  return <div className="workspace-switcher"><Brand /><span className="workspace-divider">/</span><details><summary>{active}<span className="workspace-chevron">⌄</span></summary><div className="workspace-menu"><Link to="/">Student Profile</Link><Link to="/school">Counselor Workspace</Link><Link to="/admin">Administration</Link><Link to="/welcome">Public Website</Link></div></details></div>
+}
+
+function ProfileMenu({ profile, label }: { profile?: Profile; label: string }) {
+  return <details className="profile-menu"><summary><div className="avatar">AP</div><div><strong>{profile?.name || 'Ari Pratama'}</strong><span>{label}</span></div><span className="profile-chevron">⌄</span></summary><div className="profile-popover"><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Privacy</Link><Link to="/welcome">Sign out</Link></div></details>
+}
+
+function StudentAppHeader({ profile }: { profile: Profile }) {
+  return <header className="student-header"><div className="student-header-inner"><WorkspaceSwitcher active="Student Profile" /><nav className="student-nav" aria-label="Student navigation">{studentNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `student-nav-link ${isActive ? 'active' : ''}`}><span className="student-nav-icon">{item.icon}</span>{item.label}</NavLink>)}</nav><div className="student-utilities"><Link to="/methodology" className="help-link">Help</Link><ProfileMenu profile={profile} label="Student profile" /></div></div></header>
+}
+
+function MobileStudentNavigation() {
+  const mobileNav = studentNav.slice(0, 4)
+  return <nav className="mobile-student-nav" aria-label="Mobile student navigation">{mobileNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `mobile-student-link ${isActive ? 'active' : ''}`}><span>{item.icon}</span>{item.label === 'Assessments' ? 'Assess' : item.label === 'Major Explorer' ? 'Explore' : item.label.replace('IAQ ', '')}</NavLink>)}</nav>
+}
+
+function StudentAppShell({ children, profile }: { children: React.ReactNode; profile: Profile }) {
+  const location = useLocation()
+  return <div className="app-shell student-shell"><StudentAppHeader profile={profile} /><div className="main-area"><main className="content"><AnimatePresence mode="wait"><motion.div key={location.pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .25 }}>{children}</motion.div></AnimatePresence></main><footer className="site-footer"><span>IAQ / EXPERIMENTAL EDUCATIONAL PROFILE</span><span>Not a clinical diagnosis or officially normed IQ score.</span></footer></div><MobileStudentNavigation /></div>
+}
+
+function WorkspaceNavLink({ to, label, icon, active }: { to: string; label: string; icon: string; active: boolean }) {
+  return <Link to={to} className={`workspace-nav-link ${active ? 'active' : ''}`}><span className="workspace-nav-icon">{icon}</span><span>{label}</span></Link>
+}
+
+function WorkspaceFrame({ children, profile, kind, groups }: { children: React.ReactNode; profile?: Profile; kind: 'counselor' | 'admin'; groups: { label?: string; items: { to: string; label: string; icon: string }[] }[] }) {
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const nav = [
-    { to: '/', label: 'Home', icon: '⌂', end: true },
-    { to: '/assess', label: 'Take a test', icon: '◈' },
-    { to: '/compass', label: 'Find your path', icon: '✦' },
-    { to: '/tracker', label: 'My progress', icon: '◒' },
-    { to: '/results', label: 'See your potential', icon: '↗' }
-  ]
-  const isOps = profile.role !== 'student'
-  return <div className="app-shell">
-    <aside className={`sidebar ${mobileOpen ? 'is-open' : ''}`}>
-      <div className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></div>
-      <div className="sidebar-kicker">Student intelligence<br />platform / V1.0</div>
-      <nav className="main-nav" aria-label="Main navigation">
-        {nav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}><span className="nav-icon">{item.icon}</span>{item.label}<span className="nav-arrow">↗</span></NavLink>)}
-      </nav>
-      <div className="sidebar-rule" />
-      <div className="sidebar-section-label">Workspace</div>
-      <nav className="main-nav">
-        <NavLink to="/school" onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}><span className="nav-icon">⌘</span>Counselor dashboard<span className="nav-arrow">↗</span></NavLink>
-        <NavLink to="/admin" onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}><span className="nav-icon">▦</span>Question studio<span className="nav-arrow">↗</span></NavLink>
-      </nav>
-      <div className="sidebar-bottom">
-        <Link to="/methodology" className="method-link">How it works <span>↗</span></Link>
-        <div className="user-chip"><div className="avatar">AP</div><div><strong>{profile.name}</strong><span>{isOps ? profile.role : 'Student profile'}</span></div><span className="more">···</span></div>
-      </div>
-    </aside>
-    <div className="main-area">
-      <header className="topbar">
-        <button className="mobile-menu" onClick={() => setMobileOpen((x) => !x)} aria-label="Toggle navigation">☰</button>
-        <div className="crumb"><span>IAQ</span><span className="crumb-slash">/</span><span>{location.pathname === '/' ? 'Home' : location.pathname === '/assess' ? 'Take a test' : location.pathname === '/compass' ? 'Find your path' : location.pathname === '/tracker' ? 'My progress' : location.pathname === '/results' ? 'See your potential' : location.pathname.slice(1).replace('-', ' ')}</span></div>
-        <div className="topbar-actions"><span className="status-dot" /><span className="topbar-status">Pilot environment</span><button className="icon-button" aria-label="Notifications">◔<span className="notification-dot" /></button></div>
-      </header>
-      <main className="content"><AnimatePresence mode="wait"><motion.div key={location.pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .25 }}>{children}</motion.div></AnimatePresence></main>
-      <footer className="site-footer"><span>IAQ / EXPERIMENTAL EDUCATIONAL PROFILE</span><span>Not a clinical diagnosis or officially normed IQ score.</span></footer>
-    </div>
-  </div>
+  const isAdmin = kind === 'admin'
+  const workspaceTitle = isAdmin ? 'IAQ Administration' : 'Counselor Workspace'
+  const defaultHash = location.pathname === (isAdmin ? '/admin' : '/school') ? '#overview' : location.hash
+  return <div className={`workspace-shell ${kind}-workspace`}><aside className={`workspace-sidebar ${mobileOpen ? 'is-open' : ''}`}><div className="workspace-sidebar-brand"><WorkspaceSwitcher active={workspaceTitle} /></div><div className="workspace-sidebar-label">{isAdmin ? 'Administration system' : 'Student support'}</div>{groups.map((group) => <div className="workspace-nav-group" key={group.label || 'primary'}>{group.label && <div className="workspace-group-label">{group.label}</div>}<nav aria-label={group.label || workspaceTitle}>{group.items.map((item) => <WorkspaceNavLink key={item.label} {...item} active={defaultHash === `#${item.to.split('#')[1] || 'overview'}`} />)}</nav></div>)}<div className="workspace-sidebar-bottom"><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Settings</Link></div></aside><div className="workspace-main"><header className="workspace-topbar"><button className="workspace-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-label="Toggle workspace navigation">☰</button><div className="workspace-page-title"><span className="eyebrow">{workspaceTitle}</span><strong>{pageName(location.pathname)}</strong></div><div className="workspace-actions"><label className="workspace-search"><span>⌕</span><input aria-label="Search students" placeholder={isAdmin ? 'Search content' : 'Search students'} /></label>{isAdmin ? <Link to="/admin#item-bank" className="button primary workspace-action-button">Add item <span>＋</span></Link> : <Link to="/school#follow-ups" className="button secondary workspace-action-button">Invite student <span>＋</span></Link>}<ProfileMenu profile={profile} label={isAdmin ? 'Administrator' : 'Counselor'} /></div></header><main className="workspace-content"><AnimatePresence mode="wait"><motion.div key={location.pathname + location.hash} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .25 }}>{children}</motion.div></AnimatePresence></main><footer className="site-footer"><span>IAQ / {isAdmin ? 'ADMINISTRATION' : 'COUNSELOR WORKSPACE'}</span><span>Access is consent-aware and audit logged.</span></footer></div></div>
+}
+
+function CounselorAppShell({ children }: { children: React.ReactNode }) {
+  return <WorkspaceFrame kind="counselor" groups={[{ items: [{ to: '/school#overview', label: 'Overview', icon: '⌂' }, { to: '/school#students', label: 'Students', icon: '♙' }, { to: '/school#cohorts', label: 'Cohorts', icon: '◌' }, { to: '/school#reports', label: 'Reports', icon: '▤' }, { to: '/school#follow-ups', label: 'Follow-ups', icon: '↗' }, { to: '/school#notes', label: 'Counselor Notes', icon: '✎' }] }]}>{children}</WorkspaceFrame>
+}
+
+function AdminAppShell({ children }: { children: React.ReactNode }) {
+  return <WorkspaceFrame kind="admin" groups={[{ label: 'Content', items: [{ to: '/admin#overview', label: 'Overview', icon: '⌂' }, { to: '/admin#item-bank', label: 'Item Bank', icon: '▦' }, { to: '/admin#item-families', label: 'Item Families', icon: '◇' }, { to: '/admin#review-queue', label: 'Review Queue', icon: '↗' }, { to: '/admin#major-library', label: 'Major Library', icon: '✦' }] }, { label: 'Assessment system', items: [{ to: '/admin#assessments', label: 'Assessments', icon: '◈' }, { to: '/admin#forms', label: 'Forms', icon: '□' }, { to: '/admin#scoring', label: 'Scoring & Versions', icon: '⌁' }, { to: '/admin#item-health', label: 'Item Health', icon: '◒' }] }, { label: 'Operations', items: [{ to: '/admin#analytics', label: 'Analytics', icon: '◌' }, { to: '/admin#users', label: 'Users & Schools', icon: '♙' }, { to: '/admin#audit-logs', label: 'Audit Logs', icon: '≡' }, { to: '/admin#settings', label: 'Settings', icon: '⚙' }] }]}>{children}</WorkspaceFrame>
+}
+
+function PublicNavbar() {
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const links = [{ to: '/methodology', label: 'How IAQ Works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Major Exploration' }, { to: '/welcome#schools', label: 'For Schools' }, { to: '/methodology', label: 'Methodology' }]
+  return <header className="public-navbar"><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><Link to="/assess" className="button primary">Start Assessment <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}</nav>}</header>
+}
+
+function PublicSite() {
+  return <div className="public-site"><PublicNavbar /><main className="public-main"><div className="public-kicker">A clearer way to start thinking about what comes next</div><h1>See how you think.<br /><em>Find your next direction.</em></h1><p>IAQ brings together thinking patterns, interests, and real experiences to help students explore their potential.</p><div className="public-actions-large"><Link to="/assess" className="button primary">Start your assessment <span>→</span></Link><Link to="/methodology" className="text-button">How it works ↗</Link></div><div className="public-cards"><section><span>01 / THINKING</span><h2>Understand your strengths.</h2><p>Explore seven kinds of thinking without reducing you to one number.</p></section><section id="schools"><span>02 / SCHOOLS</span><h2>Give every student context.</h2><p>Support better conversations with consent-aware student and counselor workspaces.</p></section><section><span>03 / DIRECTION</span><h2>Make a next step feel possible.</h2><p>Compare major ideas, try small experiments, and build evidence over time.</p></section></div></main></div>
 }
 
 function PageIntro({ eyebrow, title, body, action }: { eyebrow: string; title: React.ReactNode; body?: string; action?: React.ReactNode }) {
@@ -182,7 +212,7 @@ function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number
   }
   if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>We are choosing a balanced mix from the IAQ question bank.</p></div></main></div>
   const displayNumber = usingApi ? (answers[question.id] ? answered : answered + 1) : index + 1
-  return <div className="assessment-screen"><header className="assessment-header"><Link to="/" className="brand"><span className="brand-mark">i</span><span>IAQ</span><span className="brand-dot">·</span></Link><div className="assessment-progress"><span>IAQ Cognitive Profile</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><button className="text-button" onClick={() => setPaused(true)}>Save & pause</button></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={usingApi || index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? (usingApi ? 'Ready to save' : 'Answer saved locally') : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected || submitting} onClick={next}>{submitting ? 'Saving…' : displayNumber === totalQuestions ? 'See profile' : 'Continue'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error">{apiError}</div>}<div className="assessment-footnote">{usingApi ? '56 questions / 8 from each thinking area / randomized for this attempt.' : 'Demo fallback / 14 questions / start the IAQ API for a randomized 56-question form.'}</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {totalQuestions} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart this test</button></div></div>}</div>
+  return <div className="assessment-screen"><header className="assessment-header"><div className="assessment-brand"><Brand /><span className="assessment-name">IAQ Cognitive Profile</span></div><div className="assessment-progress"><span>Assessment progress</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><div className="assessment-actions"><button className="text-button" onClick={() => setPaused(true)}>Pause</button><button className="text-button" onClick={() => setApiError('Technical issue noted. If this continues, exit and restart the assessment.')}>Report issue</button><Link className="assessment-exit" to="/">Exit assessment</Link></div></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={usingApi || index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? (usingApi ? 'Ready to save' : 'Answer saved locally') : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected || submitting} onClick={next}>{submitting ? 'Saving…' : displayNumber === totalQuestions ? 'See profile' : 'Continue'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error">{apiError}</div>}<div className="assessment-footnote">{usingApi ? '56 questions / 8 from each thinking area / randomized for this attempt.' : 'Demo fallback / 14 questions / start the IAQ API for a randomized 56-question form.'}</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {totalQuestions} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart this test</button></div></div>}</div>
 }
 
 function Compass({ savedMajors, toggleMajor }: { savedMajors: string[]; toggleMajor: (name: string) => void }) {
