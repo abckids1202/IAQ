@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
-import { finishAssessment, requestReportDelivery, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment } from './api'
+import { finishAssessment, requestReportDelivery, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment, submitFeedback } from './api'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
@@ -12,7 +12,113 @@ const initialProfile: Profile = {
 
 const ASSESSMENT_SESSION_KEY = 'iaq-active-assessment-session'
 
+const searchPages = [
+  { to: '/', label: 'Overview', description: 'Start here and see your latest profile.' },
+  { to: '/assess', label: 'Take a test', description: 'Start the 35-minute assessment.' },
+  { to: '/results', label: 'Your results', description: 'Read your seven-domain report.' },
+  { to: '/compass', label: 'Explore directions', description: 'Compare possible next directions.' },
+  { to: '/tracker', label: 'Your progress', description: 'Review evidence and activity.' },
+  { to: '/methodology', label: 'Methodology', description: 'Understand the IAQ approach and limits.' },
+]
+
+function AppBootLoader({ active }: { active: boolean }) {
+  return <AnimatePresence>{active && <motion.div className="app-boot-loader" initial={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .28 }}><Brand /><span className="boot-line"><i /></span><small>Preparing your workspace</small></motion.div>}</AnimatePresence>
+}
+
+function ScrollProgress() {
+  const [progress, setProgress] = useState(0)
+  useEffect(() => {
+    const update = () => {
+      const max = document.documentElement.scrollHeight - window.innerHeight
+      setProgress(max > 0 ? (window.scrollY / max) * 100 : 0)
+    }
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    return () => { window.removeEventListener('scroll', update); window.removeEventListener('resize', update) }
+  }, [])
+  return <div className="scroll-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
+}
+
+function CursorFollower() {
+  const cursor = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => { if (cursor.current) cursor.current.style.transform = `translate3d(${event.clientX}px, ${event.clientY}px, 0)` }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [])
+  return <div ref={cursor} className="cursor-follower" aria-hidden="true" />
+}
+
+function BackToTop() {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const update = () => setVisible(window.scrollY > 500)
+    window.addEventListener('scroll', update, { passive: true })
+    return () => window.removeEventListener('scroll', update)
+  }, [])
+  return <AnimatePresence>{visible && <motion.button className="back-to-top" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="Back to top">↑</motion.button>}</AnimatePresence>
+}
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(() => localStorage.getItem('iaq-theme') === 'dark')
+  const toggle = () => {
+    const next = !dark
+    setDark(next)
+    document.documentElement.dataset.theme = next ? 'dark' : 'light'
+    localStorage.setItem('iaq-theme', next ? 'dark' : 'light')
+  }
+  return <button className="theme-toggle" onClick={toggle} aria-label={dark ? 'Use light mode' : 'Use dark mode'} aria-pressed={dark}><span>{dark ? '☼' : '◐'}</span><small>{dark ? 'Light' : 'Dark'}</small></button>
+}
+
+function AnimatedNumber({ value }: { value: number }) {
+  const [display, setDisplay] = useState(0)
+  useEffect(() => {
+    const started = performance.now()
+    const duration = 650
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / duration)
+      setDisplay(Math.round(value * (1 - Math.pow(1 - progress, 3))))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [value])
+  return <>{display}</>
+}
+
+function GlobalSearch({ compact = false }: { compact?: boolean }) {
+  const [query, setQuery] = useState('')
+  const matches = searchPages.filter((page) => `${page.label} ${page.description}`.toLowerCase().includes(query.toLowerCase())).slice(0, 4)
+  return <div className={`global-search ${compact ? 'compact' : ''}`}><label><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search IAQ" aria-label="Search IAQ" /></label>{query && <div className="search-results" role="listbox" aria-label="Search results">{matches.length ? matches.map((page) => <Link key={page.to} to={page.to} onClick={() => setQuery('')} role="option"><strong>{page.label}</strong><span>{page.description}</span></Link>) : <div className="search-empty">No IAQ pages match “{query}”.</div>}</div>}</div>
+}
+
+function FeedbackButton() {
+  const [open, setOpen] = useState(false)
+  const [message, setMessage] = useState('')
+  const [status, setStatus] = useState('')
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    try { await submitFeedback({ message, page: window.location.pathname }); setStatus('Thanks — your note was saved.'); setMessage('') } catch { setStatus('We could not save that note right now.') }
+  }
+  return <><button className="feedback-trigger" onClick={() => setOpen(true)} aria-label="Send feedback">Feedback</button>{open && <div className="modal-backdrop" role="presentation"><div className="feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title"><button className="modal-close" onClick={() => setOpen(false)} aria-label="Close feedback">×</button><div className="eyebrow">Help us improve IAQ</div><h2 id="feedback-title">What should feel better?</h2><p>Tell us what was confusing, useful, or missing. Do not include private assessment answers.</p><form onSubmit={submit}><label>Feedback<textarea value={message} onChange={(event) => setMessage(event.target.value)} required minLength={4} rows={4} placeholder="I noticed…" /></label><button className="button primary" disabled={!message.trim()}>Send feedback <span>→</span></button>{status && <span className="feedback-status" role="status">{status}</span>}</form></div></div>}</>
+}
+
+function NotFound() {
+  return <div className="not-found"><div className="eyebrow">404 / page not found</div><h1>That page is not here.<br /><em>Let’s get you back.</em></h1><p>The link may be old or the page may have moved.</p><Link className="button primary" to="/">Back to overview <span>→</span></Link></div>
+}
+
 function App() {
+  const location = useLocation()
+  const [booting, setBooting] = useState(true)
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('iaq-theme')
+    if (savedTheme) document.documentElement.dataset.theme = savedTheme
+    const timer = window.setTimeout(() => setBooting(false), 320)
+    return () => window.clearTimeout(timer)
+  }, [])
+  useEffect(() => { window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior }) }, [location.pathname])
   const [profile, setProfile] = useState<Profile>(() => {
     try { return JSON.parse(localStorage.getItem('iaq-profile') || '') as Profile } catch { return initialProfile }
   })
@@ -29,7 +135,8 @@ function App() {
     setAssessmentComplete(true)
   }
 
-  return <Routes>
+  const quietMode = location.pathname === '/assess/session'
+  return <><AppBootLoader active={booting} /><ScrollProgress /><CursorFollower /><Routes>
     <Route path="/welcome" element={<PublicSite />} />
     <Route path="/" element={<StudentAppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></StudentAppShell>} />
     <Route path="/assess" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
@@ -41,8 +148,8 @@ function App() {
     <Route path="/admin" element={<AdminAppShell><Admin /></AdminAppShell>} />
     <Route path="/methodology" element={<StudentAppShell profile={profile}><Methodology /></StudentAppShell>} />
     <Route path="/privacy" element={<StudentAppShell profile={profile}><Privacy /></StudentAppShell>} />
-    <Route path="*" element={<Navigate to="/" replace />} />
-  </Routes>
+    <Route path="*" element={<NotFound />} />
+  </Routes>{!quietMode && <><BackToTop /><FeedbackButton /></>}</>
 }
 
 const studentNav = [
@@ -71,7 +178,8 @@ function ProfileMenu({ profile, label }: { profile?: Profile; label: string }) {
 }
 
 function StudentAppHeader({ profile }: { profile: Profile }) {
-  return <header className="student-header"><div className="student-header-inner"><WorkspaceSwitcher active="Student Profile" /><nav className="student-nav" aria-label="Student navigation">{studentNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `student-nav-link ${isActive ? 'active' : ''}`}><span className="student-nav-icon">{item.icon}</span>{item.label}</NavLink>)}</nav><div className="student-utilities"><Link to="/methodology" className="help-link">Help</Link><ProfileMenu profile={profile} label="Student profile" /></div></div></header>
+  const [menuOpen, setMenuOpen] = useState(false)
+  return <header className="student-header"><div className="student-header-inner"><WorkspaceSwitcher active="Student Profile" /><button className="student-menu-toggle" onClick={() => setMenuOpen((value) => !value)} aria-expanded={menuOpen} aria-controls="student-navigation">Menu</button><nav id="student-navigation" className={`student-nav ${menuOpen ? 'is-open' : ''}`} aria-label="Student navigation">{studentNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMenuOpen(false)} className={({ isActive }) => `student-nav-link ${isActive ? 'active' : ''}`}><span className="student-nav-icon">{item.icon}</span>{item.label}</NavLink>)}</nav><div className="student-utilities"><GlobalSearch compact /><Link to="/methodology" className="help-link">Help</Link><ThemeToggle /><ProfileMenu profile={profile} label="Student profile" /></div></div></header>
 }
 
 function MobileStudentNavigation() {
@@ -107,8 +215,14 @@ function AdminAppShell({ children }: { children: React.ReactNode }) {
 
 function PublicNavbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const update = () => setScrolled(window.scrollY > 16)
+    window.addEventListener('scroll', update, { passive: true })
+    return () => window.removeEventListener('scroll', update)
+  }, [])
   const links = [{ to: '/methodology', label: 'How it works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Explore directions' }, { to: '/welcome#schools', label: 'For schools' }, { to: '/methodology', label: 'Methodology' }]
-  return <header className="public-navbar"><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><Link to="/assess" className="button primary">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}</nav>}</header>
+  return <header className={`public-navbar ${scrolled ? 'scrolled' : ''}`}><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><GlobalSearch compact /><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><ThemeToggle /><Link to="/assess" className="button primary magnetic">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}<GlobalSearch /></nav>}</header>
 }
 
 function PublicSite() {
@@ -139,7 +253,7 @@ function Home({ profile }: { profile: Profile; savedMajors: string[] }) {
   return <div className="page home-page">
     <section className="compact-hero"><div><div className="eyebrow">IAQ / your starting point</div><h1>{hasResult ? <>Your result is ready.<br /><em>See what stands out.</em></> : <>Start with one test.<br /><em>See how you think.</em></>}</h1><p>{hasResult ? 'Read your private profile first. Explore directions only after you understand the evidence.' : 'A 35-minute assessment across seven thinking areas, followed by a clear visual report.'}</p></div><Link to={hasResult ? '/results' : '/assess'} className="button primary">{hasResult ? 'See my results' : 'Start test'} <span>→</span></Link></section>
     <div className="notice-bar compact-notice"><span className="notice-icon">i</span><span><strong>Private and provisional.</strong> This is an educational profile, not an official IQ score or diagnosis.</span><Link to="/methodology">How it works ↗</Link></div>
-    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? 'Your results / seven areas' : 'Your result / seven areas'}</div><h2>{hasResult ? 'A clear picture of your thinking' : 'Your report will appear here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Complete the test'}</span><strong>{hasResult ? composite : '—'}{hasResult && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : 'Seven domain scores, accuracy, and timing context.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? profile.scores[domain] : 0}%` }} /></i><strong>{hasResult ? profile.scores[domain] : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">The first step</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : 'Start the test.'}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>Test first. Results next. Directions after.</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>Take a test</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>See your results</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>Explore directions</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
+    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? 'Your results / seven areas' : 'Your result / seven areas'}</div><h2>{hasResult ? 'A clear picture of your thinking' : 'Your report will appear here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Complete the test'}</span><strong>{hasResult ? <AnimatedNumber value={composite} /> : '—'}{hasResult && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : 'Seven domain scores, accuracy, and timing context.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? profile.scores[domain] : 0}%` }} /></i><strong>{hasResult ? profile.scores[domain] : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">The first step</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : 'Start the test.'}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>Test first. Results next. Directions after.</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>Take a test</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>See your results</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>Explore directions</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
   </div>
 }
 
@@ -400,7 +514,12 @@ function Admin() {
   return <div className="page ops-page"><PageIntro eyebrow="Question studio / Content review" title={<>Make every question<br /><em>worth asking.</em></>} body="Manage reviewed questions, check how they are behaving, and keep early experiments separate from real evidence." action={<button className="button primary">Add a question <span>＋</span></button>} /><div className="studio-banner"><div><span className="eyebrow">Question journey</span><strong>Draft → Checked → Reviewed → Pilot → Calibrated → Live</strong></div><span className="mono-label">12 live / 06 to review</span></div><section className="panel item-table-panel"><div className="table-head"><div><div className="eyebrow">Question bank / versioned</div><h2>How are the questions doing?</h2></div><div className="filter-row"><button className="filter active">All questions</button><button className="filter">Needs review</button><button className="filter">＋ Filter</button></div></div><div className="item-table"><div className="item-row item-label"><span>Question</span><span>Thinking area</span><span>Status</span><span>Answers</span><span>Difficulty</span><span>Health</span><span /></div>{items.map((item) => <div className="item-row" key={item.id}><div><span className="mono-label">{item.id} / V1</span><strong>{item.title}</strong></div><span>{item.domain}</span><span className={`lifecycle ${item.status.toLowerCase()}`}>{item.status}</span><span className="mono-value">{item.responses || '—'}</span><span className="mono-value">{item.difficulty}</span><span className={item.flag ? 'health-flag' : 'health-good'}>{item.flag || 'Healthy'}</span><button className="table-action">Open ↗</button></div>)}</div></section><div className="admin-bottom"><section className="panel item-detail"><div className="eyebrow">Selected question / LOG-081</div><h2>Conditional studio logic</h2><p>“If the studio is open, the green light is on. The green light is off. Which conclusion is safest?”</p><div className="answer-preview"><span className="correct">A</span><span>It is closed</span><span className="answer-key">answer key / protected</span></div><div className="detail-stats"><Metric label="Correct rate" value={48} /><Metric label="Separates levels" value={31} /><Metric label="Confusion reports" value={18} /></div></section><section className="panel review-queue"><div className="eyebrow">Review queue / 03</div><h2>Needs a second look</h2><div className="queue-list"><div><span className="queue-dot coral" /><span><strong>LOG-081</strong> not separating well</span><b>→</b></div><div><span className="queue-dot orange" /><span><strong>VIS-033</strong> screen issue</span><b>→</b></div><div><span className="queue-dot blue" /><span><strong>NUM-024</strong> not enough answers yet</span><b>→</b></div></div><button className="text-button">Open review queue ↗</button></section></div></div>
 }
 
-function Methodology() { return <div className="page legal-page"><PageIntro eyebrow="IAQ / Methodology" title={<>Useful now.<br /><em>Honest about limits.</em></>} body="IAQ V1.0 is designed as an early educational product. It is built to become more evidence-based through real pilots, not to simulate scientific certainty." /><div className="legal-grid"><section><div className="eyebrow">01 / What we measure</div><h2>Seven cognitive domains, one relative profile.</h2><p>We show how signals compare within your own profile. We do not show population percentiles, a fake bell curve, or a clinical IQ diagnosis.</p>{domains.map((domain, i) => <div className="method-row" key={domain}><span>0{i + 1}</span><strong>{domain}</strong><p>{domainMeta[domain].description}</p></div>)}</section><section className="legal-callout"><span className="notice-icon">i</span><h2>Content can be generated. Evidence cannot.</h2><p>AI may help draft candidates, distractors, or explanations. Real student responses are required to estimate difficulty, discrimination, fairness, and predictive value.</p><div className="method-steps"><span><b>01</b> reviewed families</span><span><b>02</b> deterministic variants</span><span><b>03</b> human review</span><span><b>04</b> real pilot data</span></div></section></div><div className="legal-footer"><Link to="/privacy">Read privacy model ↗</Link><Link to="/">Return to overview ↗</Link></div></div> }
+function FAQSection() {
+  const questions = [{ question: 'Is this an official IQ test?', answer: 'No. IAQ is an experimental educational profile that compares your own domain signals. It is not a diagnosis, population percentile, or officially normed IQ score.' }, { question: 'Why is the test timed?', answer: 'The 35-minute limit creates a consistent snapshot of accuracy and timing. Your report keeps timing context visible instead of treating speed as a verdict.' }, { question: 'Can my result change?', answer: 'Yes. A later attempt can look different because of focus, familiarity, fatigue, and the questions selected. That is why we show evidence and confidence.' }, { question: 'What happens to my answers?', answer: 'Responses are used to calculate your private report. Synthetic data is kept separate from real pilot responses, and report email is optional.' }]
+  return <section className="faq-section"><div><div className="eyebrow">Questions students ask</div><h2>Clear answers before you begin.</h2></div><div className="faq-list">{questions.map((item) => <details key={item.question}><summary>{item.question}<span>＋</span></summary><p>{item.answer}</p></details>)}</div></section>
+}
+
+function Methodology() { return <div className="page legal-page"><PageIntro eyebrow="IAQ / Methodology" title={<>Useful now.<br /><em>Honest about limits.</em></>} body="IAQ V1.0 is designed as an early educational product. It is built to become more evidence-based through real pilots, not to simulate scientific certainty." /><div className="legal-grid"><section><div className="eyebrow">01 / What we measure</div><h2>Seven cognitive domains, one relative profile.</h2><p>We show how signals compare within your own profile. We do not show population percentiles, a fake bell curve, or a clinical IQ diagnosis.</p>{domains.map((domain, i) => <div className="method-row" key={domain}><span>0{i + 1}</span><strong>{domain}</strong><p>{domainMeta[domain].description}</p></div>)}</section><section className="legal-callout"><span className="notice-icon">i</span><h2>Content can be generated. Evidence cannot.</h2><p>AI may help draft candidates, distractors, or explanations. Real student responses are required to estimate difficulty, discrimination, fairness, and predictive value.</p><div className="method-steps"><span><b>01</b> reviewed families</span><span><b>02</b> deterministic variants</span><span><b>03</b> human review</span><span><b>04</b> real pilot data</span></div></section></div><FAQSection /><div className="legal-footer"><Link to="/privacy">Read privacy model ↗</Link><Link to="/">Return to overview ↗</Link></div></div> }
 function Privacy() { return <div className="page legal-page"><PageIntro eyebrow="IAQ / Privacy model" title={<>A profile should<br /><em>belong to you.</em></>} body="We design for minors, consent, and the minimum useful data. Demo mode keeps everything in this browser." /><div className="privacy-grid">{[{ title: 'Consent first', body: 'Assessment access requires a clear consent record and versioned notice. Guardian support is part of the production data model.' }, { title: 'Identity apart', body: 'Identity and research response data are separate concepts. Export and deletion flows are planned as first-class product capabilities.' }, { title: 'No surveillance', body: 'No camera, microphone, eye tracking, emotion detection, or secret behavioural inference is used.' }, { title: 'Human context', body: 'Reports explain signals and uncertainty. They do not diagnose, decide a student’s future, or rank students publicly.' }].map((item, i) => <div className="privacy-card" key={item.title}><span>0{i + 1}</span><h2>{item.title}</h2><p>{item.body}</p></div>)}</div><div className="notice-bar"><span className="notice-icon">!</span><span><strong>Demo mode note.</strong> This local preview uses seeded example data. Configure a production database, authentication provider, encryption, and retention policy before collecting real student responses.</span></div></div> }
 
 export default App

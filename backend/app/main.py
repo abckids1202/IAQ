@@ -46,6 +46,7 @@ RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
 SAVED_MAJORS: Dict[str, List[str]] = {}
 REPORT_DELIVERIES: Dict[str, Dict[str, Any]] = {}
+FEEDBACK: List[Dict[str, Any]] = []
 DATABASE_URL = os.getenv("IAQ_DATABASE_URL")
 PERSISTENCE = PostgresAssessmentStore(DATABASE_URL) if DATABASE_URL else None
 
@@ -98,6 +99,12 @@ class ReportDeliveryCreate(BaseModel):
     age: Optional[int] = Field(default=None, ge=13, le=120)
 
 
+class FeedbackCreate(BaseModel):
+    message: str = Field(min_length=4, max_length=2000)
+    page: str = Field(default="/", min_length=1, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=254)
+
+
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Return a strict student payload; internal provenance never leaves the API."""
     allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
@@ -148,6 +155,15 @@ def create_randomized_form(mode: str) -> List[str]:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok", "service": "iaq-api", "mode": "postgres" if PERSISTENCE else "development_demo"}
+
+
+@app.post("/feedback")
+def create_feedback(payload: FeedbackCreate) -> Dict[str, Any]:
+    feedback = {"id": str(uuid4()), "message": payload.message.strip(), "page": payload.page, "email": payload.email.strip().lower() if payload.email else None, "created_at": NOW()}
+    FEEDBACK.append(feedback)
+    if PERSISTENCE:
+        PERSISTENCE.store_feedback(feedback)
+    return {"accepted": True, "id": feedback["id"]}
 
 
 @app.get("/me")

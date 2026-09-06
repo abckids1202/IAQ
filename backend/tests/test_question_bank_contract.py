@@ -1,6 +1,6 @@
 from collections import Counter
 
-from app.main import ITEMS, create_randomized_form, public_item, question_bank_summary
+from app.main import FeedbackCreate, ITEMS, create_feedback, create_randomized_form, public_item, question_bank_summary
 
 
 def test_bank_has_120_candidates_per_domain_and_balanced_complete_forms():
@@ -26,3 +26,9 @@ def test_summary_exposes_review_readiness_without_answer_keys():
     assert summary["counts"]["working_memory"] == 120
     assert summary["origin_counts"]["ORIGINAL_GENERATED"] == 700
     assert "review_gate" in summary
+
+
+def test_feedback_is_accepted_without_exposing_message_in_response():
+    result = create_feedback(FeedbackCreate(message="The results page is clear.", page="/results"))
+    assert result["accepted"] is True
+    assert "message" not in result

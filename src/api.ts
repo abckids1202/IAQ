@@ -127,3 +127,7 @@ export type ReportDelivery = {
 export async function requestReportDelivery(resultId: string, payload: { name: string; email: string; granted: boolean; age?: number }): Promise<ReportDelivery> {
   return request<ReportDelivery>(`/results/${resultId}/delivery`, { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'REPORT-DELIVERY-1.0' }) })
 }
+
+export async function submitFeedback(payload: { message: string; page: string; email?: string }): Promise<{ accepted: boolean; id: string }> {
+  return request<{ accepted: boolean; id: string }>('/feedback', { method: 'POST', body: JSON.stringify(payload) })
+}

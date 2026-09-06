@@ -219,3 +219,11 @@ class PostgresAssessmentStore:
                 if not row:
                     return None
                 return {"id": str(row[0]), "result_id": str(row[1]), "name": row[2], "email": row[3], "consent_version": row[4], "status": row[5], "provider": row[6], "requested_at": row[7].isoformat() if row[7] else None, "sent_at": row[8].isoformat() if row[8] else None}
+
+    def store_feedback(self, feedback: Dict[str, Any]) -> None:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO feedback_messages (id, message, page, email, created_at) VALUES (%s, %s, %s, %s, %s)",
+                    (feedback["id"], feedback["message"], feedback["page"], feedback["email"], feedback["created_at"]),
+                )
