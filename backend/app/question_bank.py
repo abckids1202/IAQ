@@ -16,6 +16,7 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
     return {
         "id": item_id,
         "item_family_id": family,
+        "construct_id": family,
         "domain": domain,
         "type": kind,
         "prompt": prompt,
@@ -30,6 +31,8 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         "content_version": 1,
         "generation_run_id": None,
         "generation_parameters": None,
+        "provenance": "Original IAQ reviewed pilot item; not copied from a commercial test.",
+        "language": "en",
     }
 
 

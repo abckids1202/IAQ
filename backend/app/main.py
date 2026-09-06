@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import os
 import random
+import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -44,6 +45,7 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
 SAVED_MAJORS: Dict[str, List[str]] = {}
+REPORT_DELIVERIES: Dict[str, Dict[str, Any]] = {}
 DATABASE_URL = os.getenv("IAQ_DATABASE_URL")
 PERSISTENCE = PostgresAssessmentStore(DATABASE_URL) if DATABASE_URL else None
 
@@ -88,9 +90,18 @@ class ItemReviewCreate(BaseModel):
     notes: str = ""
 
 
+class ReportDeliveryCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=254)
+    consent_version: str = Field(default="REPORT-DELIVERY-1.0", min_length=1, max_length=40)
+    granted: bool = False
+    age: Optional[int] = Field(default=None, ge=13, le=120)
+
+
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    """Never return answer keys to the browser."""
-    return {key: value for key, value in item.items() if key not in {"answer", "explanation"}}
+    """Return a strict student payload; internal provenance never leaves the API."""
+    allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
+    return {key: value for key, value in item.items() if key in allowed and value is not None}
 
 
 def session_for(session_id: str) -> Optional[Dict[str, Any]]:
@@ -343,9 +354,38 @@ def majors() -> List[Dict[str, Any]]:
 
 @app.get("/recommendations")
 def recommendations() -> Dict[str, Any]:
-    cognitive = {domain: 70 for domain in DOMAINS}
+    latest = max(RESULTS.values(), key=lambda result: result.get("completed_at", ""), default=None)
+    cognitive = latest["domain_scores"] if latest else {domain: 50 for domain in DOMAINS}
     interests = {"I": 92, "A": 78, "C": 65, "R": 42, "S": 35, "E": 28}
-    return {"version": "MATCH-V1", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, 72, major["vector"]), "confidence": recommendation_confidence(7, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit with evidence and confidence; not destiny", "warnings": ["experimental_profile", "no_population_norms"]}}
+    return {"version": "MATCH-V2", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, latest["answered_count"] if latest else 0, major["vector"]), "confidence": recommendation_confidence(latest["answered_count"] if latest else 0, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit using the latest persisted cognitive result and stated interests; not destiny", "warnings": ["experimental_profile", "no_population_norms"]}}
+
+
+@app.post("/results/{result_id}/delivery")
+def request_report_delivery(result_id: str, payload: ReportDeliveryCreate) -> Dict[str, Any]:
+    """Queue an optional private report delivery after the score is visible."""
+    result = RESULTS.get(result_id)
+    if not result and PERSISTENCE:
+        result = PERSISTENCE.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+    if not payload.granted:
+        raise HTTPException(400, "Report delivery consent is required")
+    if payload.age is not None and payload.age < 18:
+        raise HTTPException(403, "Report delivery for minors requires guardian consent workflow")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.email):
+        raise HTTPException(422, "Enter a valid email address")
+    key = f"{result_id}:{payload.email.strip().lower()}"
+    existing = REPORT_DELIVERIES.get(key)
+    if not existing and PERSISTENCE:
+        existing = PERSISTENCE.get_report_delivery(result_id, payload.email.strip().lower())
+    if existing:
+        REPORT_DELIVERIES[key] = existing
+        return existing
+    delivery = {"id": str(uuid4()), "result_id": result_id, "name": payload.name.strip(), "email": payload.email.strip().lower(), "consent_version": payload.consent_version, "status": "QUEUED", "provider": "development_log", "requested_at": NOW(), "sent_at": None}
+    REPORT_DELIVERIES[key] = delivery
+    if PERSISTENCE:
+        PERSISTENCE.store_report_delivery(delivery)
+    return delivery
 
 
 @app.post("/majors/{major_id}/save")
@@ -430,6 +470,14 @@ def retire_item(item_id: str) -> Dict[str, Any]:
 @app.get("/admin/question-bank/summary")
 def question_bank_summary() -> Dict[str, Any]:
     """Expose safe operational metadata for the question-studio dashboard."""
+    lifecycle_counts: Dict[str, int] = {}
+    origin_counts: Dict[str, int] = {}
+    family_counts: Dict[str, int] = {}
+    for item in ITEMS.values():
+        lifecycle_counts[item.get("lifecycle_status", item.get("status", "UNKNOWN"))] = lifecycle_counts.get(item.get("lifecycle_status", item.get("status", "UNKNOWN")), 0) + 1
+        origin_counts[item.get("data_origin", "UNKNOWN")] = origin_counts.get(item.get("data_origin", "UNKNOWN"), 0) + 1
+        family_counts[item.get("item_family_id", item["id"])] = family_counts.get(item.get("item_family_id", item["id"]), 0) + 1
+    eligible = [item for item in ITEMS.values() if item.get("status") in {"PILOT", "ACTIVE"}]
     return {
         "total": len(ITEMS),
         "minimum_per_domain": MINIMUM_ITEMS_PER_DOMAIN,
@@ -441,4 +489,9 @@ def question_bank_summary() -> Dict[str, Any]:
         "lifecycle": "PILOT",
         "generated_count": sum(1 for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"),
         "reviewed_count": sum(1 for item in ITEMS.values() if item.get("data_origin") == "REVIEWED_CONTENT"),
+        "eligible_counts": bank_counts(eligible),
+        "lifecycle_counts": lifecycle_counts,
+        "origin_counts": origin_counts,
+        "unique_family_count": len(family_counts),
+        "review_gate": "Generated candidates remain PILOT until human review and real pilot data support activation.",
     }

@@ -1,35 +1,27 @@
-"""Deterministic, reviewable pilot item factories.
+"""Deterministic IAQ candidate factories.
 
-The factory expands the bank with explicit, reproducible rules. It creates
-candidate content for pilot review; it does not establish psychometric
-difficulty, validity, or normed scores. Every generated item stays in PILOT
-until a human reviewer promotes it.
+These factories create original, reproducible pilot candidates. They are not
+scientific norming and they never make an item active by themselves. Every
+candidate carries its seed and factory parameters so reviewers can reproduce
+the exact stimulus and independently verify the answer.
 """
 from __future__ import annotations
 
+import random
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-
-GENERATION_RUN_ID = "IAQ-FACTORY-2026-09-06-120-PER-DOMAIN"
 GENERATED_PER_DOMAIN = 100
+FACTORY_SEED = "iaq-v2-medium-hard-2026-09"
 
 
-def _item(
-    item_id: str,
-    domain: str,
-    family: str,
-    prompt: str,
-    options: List[str],
-    answer: str,
-    explanation: str,
-    kind: str = "choice",
-) -> Dict[str, Any]:
-    if len(options) != 4 or len(set(options)) != 4 or answer not in options:
-        raise ValueError(f"Invalid answer set for {item_id}")
+def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str], answer: str, explanation: str, kind: str = "choice", construct: str | None = None) -> Dict[str, Any]:
+    if answer not in options or len(set(options)) != 4:
+        raise ValueError(f"Invalid options for {item_id}")
     return {
         "id": item_id,
         "item_family_id": family,
         "domain": domain,
+        "construct_id": construct or family,
         "type": kind,
         "prompt": prompt,
         "options": options,
@@ -40,359 +32,174 @@ def _item(
         "lifecycle_status": "PILOT",
         "status": "PILOT",
         "data_origin": "ORIGINAL_GENERATED",
-        "content_version": 1,
-        "generation_run_id": GENERATION_RUN_ID,
-        "generation_parameters": {"factory": family, "seed": item_id},
+        "content_version": 2,
+        "generation_run_id": FACTORY_SEED,
+        "generation_parameters": {"factory": family.split("_")[0], "seed": FACTORY_SEED, "variant": item_id[-3:]},
+        "provenance": "Original IAQ deterministic candidate; human review required before activation.",
+        "language": "en",
     }
 
 
 def _place_correct(answer: str, distractors: Sequence[str], index: int) -> Tuple[List[str], str]:
-    values = list(distractors)
-    if len(values) != 3 or answer in values or len(set(values)) != 3:
-        raise ValueError("Generated distractors must be distinct from the answer")
-    position = index % 4
-    values.insert(position, answer)
-    return [f"{chr(65 + number)}. {value}" for number, value in enumerate(values)], f"{chr(65 + position)}. {answer}"
+    values = [answer, *distractors]
+    if len(set(values)) != 4:
+        raise ValueError("Each item must have four distinct options")
+    shift = (index * 7) % 4
+    return values[shift:] + values[:shift], answer
 
 
 def _number_options(answer: int, spread: int, index: int) -> Tuple[List[str], str]:
-    return _place_correct(str(answer), [str(answer - spread), str(answer + spread), str(answer + spread * 2)], index)
+    candidates = [answer, answer + spread, answer - spread, answer + spread * 2]
+    if len(set(candidates)) != 4:
+        candidates = [answer, answer + 3, answer - 4, answer + 8]
+    return _place_correct(str(answer), [str(value) for value in candidates[1:]], index)
 
 
 def abstract_items() -> List[Dict[str, Any]]:
+    shapes = ["triangle", "square", "pentagon", "hexagon", "circle"]
+    fills = ["outline", "striped", "solid", "dotted"]
+    rotations = [0, 90, 180, 270]
     items: List[Dict[str, Any]] = []
-    directions = ["up", "right", "down", "left"]
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        mode = index % 4
-        family = f"abstract_factory_{index % 32:02d}"
-        if mode == 0:
-            start = 7 + index
-            step = 2 + index % 11
-            sequence = [start + step * offset for offset in range(4)]
-            answer = sequence[-1] + step
-            options, key = _number_options(answer, step, index)
-            prompt = f"Sequence study {index}: {sequence[0]}, {sequence[1]}, {sequence[2]}, {sequence[3]}, ?. Which number follows?"
-            explanation = f"The sequence adds {step} each time, so the next value is {answer}."
-        elif mode == 1:
-            start = 2 + index % 17
-            multiplier = 2 + index % 3
-            sequence = [start]
-            for _ in range(3):
-                sequence.append(sequence[-1] * multiplier)
-            answer = sequence[-1] * multiplier
-            options, key = _number_options(answer, start, index)
-            prompt = f"Pattern study {index}: {sequence[0]}, {sequence[1]}, {sequence[2]}, {sequence[3]}, ?. Which number completes the rule?"
-            explanation = f"Each term is multiplied by {multiplier}, so the next value is {answer}."
-        elif mode == 2:
-            start_index = (index * 3) % 4
-            turns = 1 + index % 3
-            current = directions[start_index]
-            target = directions[(start_index + turns) % 4]
-            distractors = [direction for direction in directions if direction != target]
-            options, key = _place_correct(target, distractors, index)
-            prompt = f"Direction study {index}: a mark points {current} and turns 90 degrees clockwise {turns} time(s). Where does it point?"
-            explanation = f"{turns} clockwise quarter-turns move {current} to {target}."
-        else:
-            start = 5 + index
-            first_gap = 2 + index % 7
-            second_gap = 3 + index % 5
-            sequence = [start, start + first_gap, start + first_gap + second_gap, start + 2 * first_gap + second_gap]
-            answer = sequence[-1] + second_gap
-            options, key = _number_options(answer, first_gap, index)
-            prompt = f"Alternating study {index}: {sequence[0]}, {sequence[1]}, {sequence[2]}, {sequence[3]}, ?. What comes next?"
-            explanation = f"The gaps alternate +{first_gap}, +{second_gap}; the next step is +{second_gap}."
-        items.append(_item(f"ABS-{20 + index:03d}", "abstract_reasoning", family, prompt, options, key, explanation))
+    for index in range(100):
+        shape = shapes[index % len(shapes)]
+        fill = fills[(index // 5) % len(fills)]
+        rotation = rotations[(index * 2) % len(rotations)]
+        mark_count = 1 + index // 20
+        next_shape = shapes[(shapes.index(shape) + 2) % len(shapes)]
+        next_fill = fills[(fills.index(fill) + 1) % len(fills)]
+        next_rotation = (rotation + 90) % 360
+        answer = f"{next_fill} {next_shape}, rotated {next_rotation}°"
+        options, key = _place_correct(answer, [f"{fill} {next_shape}, rotated {next_rotation}°", f"{next_fill} {shape}, rotated {rotation}°", f"{next_fill} {next_shape}, rotated {(next_rotation + 180) % 360}°"], index)
+        items.append(_item(f"ABS-{21 + index:03d}", "abstract_reasoning", f"abstract_composition_{index % 10:02d}", f"A tile with {mark_count} marks is {fill} {shape}, rotated {rotation}°. Each step changes the shape by two positions, advances the fill by one, and rotates 90° clockwise. Which tile comes next?", options, key, "The three attributes follow separate rules: +2 shape positions, +1 fill position, and +90° rotation.", construct="relational_transformation"))
     return items
 
 
 def deductive_items() -> List[Dict[str, Any]]:
+    subjects = ["lantern", "archive", "proposal", "robot", "scholar", "survey", "blueprint", "instrument", "parcel", "prototype"]
+    categories = ["inspected", "encrypted", "approved", "calibrated", "published"]
     items: List[Dict[str, Any]] = []
-    subjects = ["the archivist", "Mina", "the rover", "the new policy", "the blue folder", "Sam", "the sensor", "the garden"]
-    categories = ["metal objects", "night-shift workers", "sealed files", "winter plants", "trained pilots", "library books", "encrypted messages", "audited records"]
-    properties = ["are durable", "know the route", "need a key", "survive frost", "follow the checklist", "have a catalogue entry", "use a passphrase", "keep a timestamp"]
-    conditions = ["the alarm is armed", "the file is encrypted", "the route is closed", "the sample is heated", "the account is verified", "the light is green", "the device is connected", "the report is approved"]
-    consequences = ["the warning is active", "a key is required", "the detour is used", "the sample expands", "access is granted", "the motor can start", "the signal is available", "the report can be released"]
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        mode = index % 4
-        family = f"logic_factory_{index % 32:02d}"
-        slot = (index - 1) % len(subjects)
-        if mode == 0:
-            subject = subjects[slot]
-            category = categories[slot]
-            property_value = properties[slot]
-            distractors = [f"{subject} {properties[(slot + offset) % len(properties)]}" for offset in (1, 2, 3)]
-            answer = f"{subject} {property_value}"
-            options, key = _place_correct(answer, distractors, index)
-            prompt = f"Deduction {index}: all {category} {property_value}; {subject} is a {category[:-1]}. What must be true?"
-            explanation = f"The stated category rule applies directly to {subject}."
-        elif mode == 1:
-            category = categories[slot]
-            subject = subjects[(slot + 3) % len(subjects)]
-            excluded = properties[(slot + 4) % len(properties)]
-            answer = f"{subject} is not {excluded}"
-            distractors = [f"{subject} is {excluded}", f"{subject} is {properties[(slot + 5) % len(properties)]}", "Nothing can be concluded"]
-            options, key = _place_correct(answer, distractors, index)
-            prompt = f"Exclusion {index}: no {category} {excluded}; {subject} is a {category[:-1]}. Which statement follows?"
-            explanation = "Being in the category rules out the excluded property."
-        elif mode == 2:
-            condition = conditions[slot]
-            consequence = consequences[slot]
-            answer = consequence.capitalize()
-            distractors = [f"{condition.capitalize()} is impossible", "The opposite must be true", "Nothing follows from the condition"]
-            options, key = _place_correct(answer, distractors, index)
-            prompt = f"Conditional reasoning {index}: if {condition}, then {consequence}. The fact is that {condition}. What follows?"
-            explanation = "The fact satisfies the condition, so the stated consequence follows."
+    for index in range(100):
+        subject = subjects[index % len(subjects)]
+        category = categories[(index // 10) % len(categories)]
+        setting = ["a lab", "an archive room", "a workshop", "a field study", "a classroom"][index // 20]
+        if index % 4 == 0:
+            prompt = f"In {setting}, every {category} {subject} is logged. No logged {subject} is anonymous. This {subject} is {category}. Which conclusion must be true?"
+            answer, distractors, explanation, family = "It is logged and not anonymous", ["It is anonymous", f"It is not {category}", "It is the newest item"], "The first rule gives logged; the second rule excludes anonymous for logged items.", "logic_chained_universal"
+        elif index % 4 == 1:
+            prompt = f"In {setting}, if a {subject} is marked urgent, it is reviewed today. The {subject} was not reviewed today. Assuming the rule is reliable, what follows?"
+            answer, distractors, explanation, family = f"The {subject} was not marked urgent", [f"The {subject} was marked urgent", "The review was completed early", "Nothing can be inferred"], "The absent consequence rules out the condition by contraposition.", "logic_contrapositive"
+        elif index % 4 == 2:
+            prompt = f"In {setting}, four {subject}s—A, B, C, and D—are ordered. A is before C, C is before D, and B is after A but before C. Which position must C occupy?"
+            answer, distractors, explanation, family = "Third", ["First", "Second", "Fourth"], "The constraints force A, B, C, D, so C is third.", "logic_order_constraints"
         else:
-            condition = conditions[(slot + 2) % len(conditions)]
-            consequence = consequences[(slot + 2) % len(consequences)]
-            answer = f"{condition.capitalize()} is not established"
-            distractors = [f"{condition.capitalize()} is certain", f"{consequence.capitalize()} is certain", "The two statements are identical"]
-            options, key = _place_correct(answer, distractors, index)
-            prompt = f"Careful inference {index}: if {condition}, then {consequence}. The consequence is not present. What is safest?"
-            explanation = "The missing consequence does not prove the condition false; it only means the condition is not established."
-        items.append(_item(f"LOG-{20 + index:03d}", "deductive_logic", family, prompt, options, key, explanation))
+            prompt = f"In {setting}, all {category} {subject} records are checked. Some checked records are archived. Which statement is guaranteed by these facts?"
+            answer, distractors, explanation, family = f"Every {category} record is checked", ["Every checked record is archived", f"Some {category} records are not checked", "No archived record is checked"], "Only the stated universal relationship is guaranteed; the other options reverse or overextend it.", "logic_scope_quantifiers"
+        options, key = _place_correct(answer, distractors, index)
+        items.append(_item(f"LOG-{21 + index:03d}", "deductive_logic", f"{family}_{index % 10:02d}", prompt, options, key, explanation, construct=family))
     return items
 
 
 def numerical_items() -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        mode = index % 6
-        family = f"numerical_factory_{index % 32:02d}"
-        if mode == 0:
-            start = 4 + index
-            step = 3 + index % 9
-            sequence = [start + step * offset for offset in range(4)]
-            answer = sequence[-1] + step
-            explanation = f"The constant difference is {step}."
-        elif mode == 1:
-            start = 5 + index
-            base = 2 + index % 6
-            gaps = [base, base + 2, base + 4]
-            sequence = [start, start + gaps[0], start + gaps[0] + gaps[1], start + sum(gaps)]
-            answer = sequence[-1] + base + 6
-            explanation = f"The gaps increase by two: +{base}, +{base + 2}, +{base + 4}, then +{base + 6}."
-        elif mode == 2:
-            start = 2 + index % 19
-            multiplier = 2 + index % 2
-            sequence = [start * multiplier**offset for offset in range(4)]
-            answer = sequence[-1] * multiplier
-            explanation = f"Each term is multiplied by {multiplier}."
-        elif mode == 3:
-            start = 3 + index
-            addition = 1 + index % 8
-            sequence = [start]
-            for _ in range(3):
-                sequence.append(sequence[-1] * 2 + addition)
-            answer = sequence[-1] * 2 + addition
-            explanation = f"Each term is doubled and then {addition} is added."
-        elif mode == 4:
-            base = 3 + index % 23
-            sequence = [(base + offset) ** 2 for offset in range(4)]
-            answer = (base + 4) ** 2
-            explanation = "The terms are consecutive square numbers."
+    for index in range(100):
+        a, b = 3 + (index % 9), 2 + (index % 5)
+        context = ["lab measurement", "transport log", "budget model", "game score", "survey count"][index // 20]
+        if index % 4 == 0:
+            values = [a, a + b, a + b + 2, a + 2 * b + 2, a + 2 * b + 6]
+            answer, explanation, family = values[-1] + 2 * b + 4, "The increments alternate between adding b and adding b+2, with the increment itself increasing by two after each pair.", "number_alternating_differences"
+        elif index % 4 == 1:
+            values = [a, a * 2 + b, (a * 2 + b) * 2 - b, ((a * 2 + b) * 2 - b) * 2 + b]
+            answer, explanation, family = values[-1] * 2 - b, "The operation alternates between doubling and adding b, then doubling and subtracting b.", "number_alternating_operations"
+        elif index % 4 == 2:
+            values = [a, a + b, a + 2 * b, a + 3 * b + 1, a + 4 * b + 1]
+            answer, explanation, family = a + 5 * b + 2, "The sequence adds b, b, then b+1, b+1, so the next paired increment is b+2.", "number_paired_increments"
         else:
-            first = 2 + index % 13
-            second = 3 + index % 11
-            sequence = [first, second, first + second, second + first + second]
-            answer = sequence[-1] + sequence[-2]
-            explanation = "Each term after the first two is the sum of the previous two."
-        options, key = _number_options(answer, max(1, 1 + index % 7), index)
-        prompt = f"Number sequence {index}: {sequence[0]}, {sequence[1]}, {sequence[2]}, {sequence[3]}, ?. Which value completes it?"
-        items.append(_item(f"NUM-{20 + index:03d}", "numerical_reasoning", family, prompt, options, key, explanation, "sequence"))
+            values = [a, a + 2, a * 2 + 1, a * 2 + 5, a * 4 + 7]
+            answer, explanation, family = values[-1] * 2 + 9, "Each pair alternates a small linear increase with a doubling step; the final transition continues the doubling rule with its offset.", "number_mixed_rule"
+        options, key = _number_options(answer, max(3, b + index % 4), index)
+        items.append(_item(f"NUM-{21 + index:03d}", "numerical_reasoning", f"{family}_{index % 10:02d}", f"In this {context}, complete the sequence: {', '.join(str(value) for value in values)}, ?. Which value follows the underlying rule?", options, key, explanation, "sequence", construct=family))
     return items
 
 
-ANALOGIES = [
-    ("compass", "direction", "thermometer", "temperature"), ("blueprint", "building", "recipe", "meal"),
-    ("sculptor", "stone", "writer", "words"), ("key", "lock", "password", "account"),
-    ("seed", "plant", "idea", "project"), ("lens", "focus", "filter", "selection"),
-    ("map", "navigation", "score", "evaluation"), ("grammar", "sentence", "syntax", "program"),
-    ("battery", "energy", "reservoir", "water"), ("bridge", "crossing", "translator", "language"),
-    ("archive", "preservation", "sieve", "separation"), ("thermostat", "temperature", "timer", "duration"),
-    ("evidence", "conclusion", "clue", "inference"), ("muscle", "movement", "engine", "motion"),
-    ("calendar", "date", "odometer", "distance"), ("editor", "manuscript", "curator", "collection"),
-    ("orbit", "planet", "path", "traveller"), ("recipe", "ingredients", "plan", "steps"),
-    ("question", "answer", "problem", "solution"), ("nest", "bird", "web", "spider"),
-    ("passport", "travel", "ticket", "entry"), ("contract", "agreement", "rule", "constraint"),
-    ("signal", "message", "indicator", "status"), ("library", "books", "gallery", "artworks"),
-    ("root", "tree", "foundation", "building"),
-]
-
-INFERENCE_CASES = [
-    ("The studio opened early on Tuesday and attendance increased.", "Opening time and attendance were associated on Tuesday.", ["The earlier opening caused every visit.", "Attendance increased every day.", "The studio was full before opening."]),
-    ("The team tested two materials before choosing the lighter one.", "The materials were tested before the choice.", ["The heavier material was unsafe.", "Only one material was available.", "The lighter material was cheaper."]),
-    ("A student submitted a draft but not the final version.", "A draft was submitted.", ["The final version was rejected.", "The draft received a high mark.", "The project was cancelled."]),
-    ("The train was delayed, so Noor arrived after the meeting began.", "The delay occurred before Noor arrived late.", ["Noor missed the entire meeting.", "The meeting was cancelled.", "Noor caused the delay."]),
-    ("The report uses a small observational sample.", "Its findings should be read as limited evidence.", ["Its conclusion is universally true.", "The sample was randomly assigned.", "The report has no useful information."]),
-    ("The garden received rain, but the new seedlings still wilted.", "Rain alone did not prevent the seedlings from wilting.", ["The rain damaged every plant.", "The seedlings were never watered.", "The garden had no soil."]),
-    ("The app loaded faster after several images were compressed.", "Image compression coincided with faster loading.", ["Compression caused every performance change.", "The app was slower before images existed.", "The images were deleted."]),
-    ("Luca checked the address twice before sending the parcel.", "Luca checked the address before sending it.", ["The parcel arrived safely.", "The address was incorrect.", "Luca sent two parcels."]),
-    ("A survey had more responses from older students than younger students.", "The age groups were represented unequally.", ["Older students had stronger opinions.", "Younger students refused to answer.", "The survey was nationally representative."]),
-    ("The machine stopped when its safety cover was opened.", "Opening the cover was followed by the machine stopping.", ["The machine was permanently broken.", "The cover was never opened.", "The safety system failed."]),
-    ("The class reviewed examples and then solved a new problem.", "The examples came before the new problem.", ["Every student solved it correctly.", "The examples were unrelated.", "The problem was easier than the examples."]),
-    ("A note says the parcel is fragile but does not list its value.", "The parcel is described as fragile; its value is unknown.", ["The parcel is expensive.", "The parcel is insured.", "The parcel contains glass."]),
-    ("The research team changed the question after the pilot interview.", "The pilot interview happened before the question changed.", ["The pilot failed.", "The new question is better.", "No interview occurred."]),
-    ("A path is shorter on the map but steeper in reality.", "Map distance alone does not describe the whole route.", ["The path is always faster.", "The path is impossible to walk.", "The map is inaccurate."]),
-    ("Mara practised the piano twice and then recorded one take.", "Mara recorded after the practice sessions.", ["The recording was perfect.", "Mara practised every day.", "The first practice was recorded."]),
-    ("The school added a quiet room and reported fewer hallway complaints.", "The change and fewer complaints occurred in the same period.", ["The quiet room caused every improvement.", "Hallway complaints disappeared permanently.", "Students stopped using the hallway."]),
-    ("The package was marked delivered, although the recipient had not checked the door.", "Delivery was marked before the recipient checked the door.", ["The package was stolen.", "The courier left it outside.", "The recipient never ordered it."]),
-    ("Two designs received the same rating but different written comments.", "Equal ratings can include different feedback.", ["The designs were identical.", "The comments were scored numerically.", "One design was rejected."]),
-    ("The lamp works with a new bulb but not with the old one.", "The bulb may be relevant to the lamp's operation.", ["The lamp is new.", "The old bulb is broken.", "The socket has no electricity."]),
-    ("The coach changed the practice order after observing the team.", "The observation happened before the order changed.", ["The team won the next match.", "The original order was wrong.", "The coach changed every exercise."]),
-    ("A library reduced opening hours while renovation was underway.", "The reduced hours occurred during renovation.", ["The library will close forever.", "Renovation finished early.", "Readers opposed the renovation."]),
-    ("A graph rises sharply, but its vertical axis begins at 90.", "The visual size of the rise may exaggerate the numerical change.", ["The data is false.", "The rise is exactly ten times larger.", "The graph has no axis."]),
-    ("The group agreed on the goal but not on the timetable.", "Agreement on a goal does not imply agreement on timing.", ["The group abandoned the goal.", "The timetable was accepted.", "The goal was impossible."]),
-    ("A student read the instructions and asked one clarifying question.", "The student encountered an issue requiring clarification.", ["The instructions were unreadable.", "The student ignored the instructions.", "The task was completed perfectly."]),
-    ("The plant grew taller near the window, where it also received more light.", "Height and light exposure were associated in this observation.", ["Light definitely caused all growth.", "The plant cannot grow elsewhere.", "The window was open."]),
-]
-
-CLASSIFICATIONS = [
-    ("granite", ["maple", "oak", "pine", "granite"]), ("easel", ["violin", "cello", "flute", "easel"]),
-    ("mercury", ["iron", "copper", "silver", "mercury"]), ("triangle", ["circle", "square", "rectangle", "triangle"]),
-    ("whale", ["sparrow", "eagle", "robin", "whale"]), ("rain", ["oak", "rose", "fern", "rain"]),
-    ("kilometre", ["second", "hour", "minute", "kilometre"]), ("copper", ["plastic", "glass", "wood", "copper"]),
-    ("January", ["March", "June", "October", "January"]), ("hammer", ["saw", "drill", "chisel", "hammer"]),
-    ("oxygen", ["nitrogen", "helium", "carbon dioxide", "oxygen"]), ("novel", ["poem", "essay", "report", "novel"]),
-    ("piano", ["violin", "trumpet", "drum", "piano"]), ("river", ["lake", "ocean", "pond", "river"]),
-    ("blue", ["red", "green", "yellow", "blue"]), ("rectangle", ["cube", "sphere", "cone", "rectangle"]),
-    ("lizard", ["salmon", "eagle", "frog", "lizard"]), ("Tuesday", ["Monday", "Wednesday", "Friday", "Tuesday"]),
-    ("courage", ["honesty", "patience", "curiosity", "courage"]), ("satellite", ["comet", "asteroid", "planet", "satellite"]),
-    ("kilogram", ["metre", "litre", "second", "kilogram"]), ("dictionary", ["atlas", "novel", "manual", "dictionary"]),
-    ("screwdriver", ["wrench", "pliers", "spanner", "screwdriver"]), ("Venus", ["Mars", "Jupiter", "Saturn", "Venus"]),
-    ("rectangle", ["triangle", "pentagon", "hexagon", "rectangle"]),
-]
-
-VOCABULARY = [
-    ("precise", "exact", ["distant", "noisy", "temporary"]), ("brief", "short", ["heavy", "bright", "remote"]),
-    ("reluctant", "hesitant", ["eager", "certain", "rapid"]), ("abundant", "plentiful", ["scarce", "fragile", "silent"]),
-    ("inference", "conclusion from evidence", ["random guess", "visual design", "spoken greeting"]), ("adapt", "adjust to a change", ["repeat exactly", "remove entirely", "measure distance"]),
-    ("contradict", "say the opposite", ["support strongly", "copy carefully", "arrive early"]), ("coherent", "logically connected", ["randomly coloured", "physically heavy", "nearly empty"]),
-    ("allocate", "assign for a purpose", ["hide from view", "break apart", "speak loudly"]), ("diminish", "become smaller", ["become clearer", "move sideways", "remain equal"]),
-    ("transparent", "easy to see through", ["difficult to hear", "likely to break", "full of sound"]), ("valid", "well supported", ["unrelated", "unfinished", "very old"]),
-    ("obscure", "difficult to understand", ["obvious", "generous", "rectangular"]), ("retain", "keep", ["discard", "rotate", "announce"]),
-    ("modify", "change partly", ["celebrate loudly", "copy without change", "measure twice"]), ("sufficient", "enough", ["missing", "opposite", "uncertain"]),
-    ("derive", "obtain from a source", ["place underneath", "avoid entirely", "decorate brightly"]), ("explicit", "stated clearly", ["hidden", "accidental", "circular"]),
-    ("consecutive", "following in order", ["far apart", "contradictory", "unrelated"]), ("robust", "strong and resilient", ["easily broken", "quietly spoken", "newly painted"]),
-    ("constrain", "limit", ["expand freely", "explain simply", "travel quickly"]), ("evaluate", "judge using criteria", ["forget immediately", "draw randomly", "fold twice"]),
-    ("ambiguous", "open to more than one meaning", ["perfectly measured", "very loud", "already finished"]), ("precede", "come before", ["come after", "remain beside", "grow within"]),
-    ("notable", "worthy of attention", ["impossible to notice", "made of metal", "located below"]),
-]
-
-
 def verbal_items() -> List[Dict[str, Any]]:
+    pairs = [("scarce", "abundant", "rigid", "flexible"), ("blueprint", "building", "outline", "essay"), ("evidence", "claim", "measurement", "conclusion"), ("thermometer", "temperature", "compass", "direction"), ("editor", "manuscript", "curator", "collection"), ("seed", "tree", "prototype", "product"), ("cautious", "reckless", "precise", "careless"), ("question", "investigate", "problem", "solve"), ("transparent", "visible", "audible", "heard"), ("archive", "preserve", "filter", "select")]
     items: List[Dict[str, Any]] = []
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        block = (index - 1) // 25
-        slot = (index - 1) % 25
-        family = f"verbal_factory_{index % 32:02d}"
-        if block == 0:
-            first, relation, third, correct = ANALOGIES[slot]
-            distractors = [ANALOGIES[(slot + offset) % len(ANALOGIES)][3] for offset in (1, 2, 3)]
-            options, key = _place_correct(correct, distractors, index)
-            prompt = f"Analogy {index}: {first} is to {relation} as {third} is to…"
-            explanation = f"The relationship from {first} to {relation} matches {third} to {correct}."
-        elif block == 1:
-            statement, correct, distractors = INFERENCE_CASES[slot]
-            options, key = _place_correct(correct, distractors, index)
-            prompt = f"Reading inference {index}: {statement} What is the safest conclusion?"
-            explanation = "The correct response stays within what the statement supports and avoids an extra causal claim."
-        elif block == 2:
-            odd, group = CLASSIFICATIONS[slot]
-            options, key = _place_correct(odd, [value for value in group if value != odd], index)
-            prompt = f"Classification {index}: which item does not belong with the other three?"
-            explanation = f"{odd.capitalize()} belongs to a different category from the other three choices."
+    for index in range(100):
+        first, relation, third, answer = pairs[index % len(pairs)]
+        context = ["a design brief", "a research note", "a school project", "a museum label"][index // 30]
+        if index % 3 == 1:
+            prompt, answer, distractors, family, explanation = f"A report says attendance rose by {15 + index}% after evening access was extended, but it does not measure morning attendance. Which conclusion is best supported?", "Evening access became more popular after the change", ["All visitors prefer evenings", "Morning attendance fell", "The venue became free"], "verbal_evidence_scope", "The report supports the observed change without justifying broader claims."
+        elif index % 3 == 2:
+            prompt, answer, distractors, family, explanation = f"In {context}, which word is closest in meaning to {first!r}?", relation, [third, "temporary", "unrelated"], "verbal_context_vocabulary", f"{relation.title()} is the closest contextual meaning for {first}."
         else:
-            word, correct, distractors = VOCABULARY[slot]
-            options, key = _place_correct(correct, distractors, index)
-            prompt = f"Vocabulary {index}: which option is closest in meaning to “{word}”?"
-            explanation = f"“{word.capitalize()}” is closest in meaning to “{correct}.”"
-        items.append(_item(f"VRB-{20 + index:03d}", "verbal_reasoning", family, prompt, options, key, explanation))
+            prompt, distractors, family, explanation = f"In {context}, {first.title()} is to {relation} as {third} is to…", ["measure", "decorate", "delay"], "verbal_analogy", "The second pair follows the same relationship as the first pair."
+        options, key = _place_correct(answer, distractors, index)
+        items.append(_item(f"VRB-{21 + index:03d}", "verbal_reasoning", f"{family}_{index % 10:02d}", prompt, options, key, explanation, construct=family))
     return items
 
 
 def spatial_items() -> List[Dict[str, Any]]:
+    directions, positions = ["north", "east", "south", "west"], ["top-left", "top-right", "bottom-right", "bottom-left"]
     items: List[Dict[str, Any]] = []
-    directions = ["north", "east", "south", "west"]
-    positions = ["upper-left", "upper-right", "lower-right", "lower-left"]
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        mode = index % 4
-        family = f"spatial_factory_{index % 32:02d}"
-        if mode == 0:
-            start_index = (index * 2) % 4
-            turns = 1 + index % 3
-            target = directions[(start_index + turns) % 4]
-            options, key = _place_correct(target, [direction for direction in directions if direction != target], index)
-            prompt = f"Rotation {index}: a pointer faces {directions[start_index]}. Rotate it 90 degrees clockwise {turns} time(s). Where does it face?"
-            explanation = f"The pointer moves {turns} quarter-turns clockwise to {target}."
-        elif mode == 1:
-            east = 2 + index % 8
-            west = 1 + index % 5
-            north = 2 + index % 7
-            south = 1 + index % 4
-            horizontal = east - west
-            vertical = north - south
-            horizontal_word = "east" if horizontal > 0 else "west" if horizontal < 0 else "no horizontal movement"
-            vertical_word = "north" if vertical > 0 else "south" if vertical < 0 else "no vertical movement"
-            correct = f"{abs(horizontal)} {horizontal_word}, {abs(vertical)} {vertical_word}"
-            distractors = [f"{abs(horizontal) + 1} east, {abs(vertical)} north", f"{abs(horizontal)} west, {abs(vertical) + 1} south", "back at the start"]
-            options, key = _place_correct(correct, distractors, index)
-            prompt = f"Grid path {index}: move {east} squares east, {north} north, {west} west, and {south} south. Where are you from the start?"
-            explanation = "Opposite horizontal and vertical movements cancel independently."
-        elif mode == 2:
-            start = positions[(index * 3) % 4]
-            target = positions[positions.index(start) ^ 1]
-            options, key = _place_correct(target, [position for position in positions if position != target], index)
-            prompt = f"Reflection {index}: a dot starts in the {start} corner. Reflect the square across its vertical centre line. Where is the dot?"
-            explanation = "A vertical reflection reverses left and right while keeping the vertical position."
+    for index in range(100):
+        board = ["paper", "screen", "floor", "map", "model"][index // 20]
+        if index % 3 == 0:
+            start, turns = directions[index % 4], 2 + index % 3
+            answer = directions[(directions.index(start) + turns) % 4]
+            distractors = [directions[(directions.index(answer) + offset) % 4] for offset in (1, 2, 3)]
+            prompt, explanation, family = f"On a {board} grid of {5 + index // 12}×{5 + index // 12}, a pointer faces {start}. Rotate it 90° clockwise {turns} times. Which direction does it face?", "Each clockwise turn advances one position in the four-direction cycle.", "spatial_rotation"
+        elif index % 3 == 1:
+            start = positions[index % 4]
+            answer, distractors = positions[(positions.index(start) + 1) % 4], [position for position in positions if position != positions[(positions.index(start) + 1) % 4]]
+            prompt, explanation, family = f"On a {board} grid, a marked corner starts at the {start} of a square with side length {4 + index // 12}. Rotate the square 90° clockwise. Where does the marked corner move?", "A clockwise quarter-turn moves each corner to the next corner in the clockwise direction.", "spatial_corner_rotation"
         else:
-            width = 3 + index % 9
-            height = 2 + index % 5
-            correct = f"{width} units tall and {height} units wide"
-            distractors = [f"{width} units wide and {height} units tall", f"{width + height} units tall", "a square with equal sides"]
-            options, key = _place_correct(correct, distractors, index)
-            prompt = f"Rotation of a rectangle {index}: it is {width} units wide and {height} units tall. After a 90-degree turn, which description is correct?"
-            explanation = "A quarter-turn swaps the rectangle's width and height."
-        items.append(_item(f"SPA-{20 + index:03d}", "visual_spatial_reasoning", family, prompt, options, key, explanation))
+            width, height = 4 + index % 7, 2 + index % 5
+            if width == height:
+                height += 1
+            answer, distractors = f"{height} units wide and {width} units tall", [f"{width} units wide and {height} units tall", f"{width + height} units wide and {height} units tall", "equal width and height"]
+            prompt, explanation, family = f"On a {board} grid, a rectangle is {width} units wide and {height} units tall. After a 90° clockwise rotation, which description is correct?", "A quarter-turn swaps the rectangle's width and height.", "spatial_dimension_transform"
+        options, key = _place_correct(answer, distractors, index)
+        items.append(_item(f"SPA-{21 + index:03d}", "visual_spatial_reasoning", f"{family}_{index % 10:02d}", prompt, options, key, explanation, construct=family))
     return items
 
 
 def memory_items() -> List[Dict[str, Any]]:
+    symbols = ["K", "7", "M", "2", "R", "9", "T", "4", "P", "6", "H", "8"]
     items: List[Dict[str, Any]] = []
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        length = 5 + index % 2
-        start = (index * 7) % 90
-        step = 2 + index % 13
-        sequence = [f"{(start + offset * step) % 100:02d}" for offset in range(length)]
-        correct_value = " — ".join(sequence)
-        rotated = sequence[1:] + sequence[:1]
-        reversed_sequence = list(reversed(sequence))
-        swapped = sequence[:2] + [sequence[3]] + [sequence[2]] + sequence[4:]
-        distractors = [" — ".join(rotated), " — ".join(reversed_sequence), " — ".join(swapped)]
-        options, key = _place_correct(correct_value, distractors, index)
-        prompt = f"Memory trial {index}: remember this sequence, then choose the exact match: {correct_value}"
-        explanation = "The correct response preserves every token and its position."
-        items.append(_item(f"MEM-{20 + index:03d}", "working_memory", f"memory_factory_{index % 32:02d}", prompt, options, key, explanation, "memory"))
+    for index in range(100):
+        length = 6 + index % 3
+        context = ["symbol", "number", "letter", "mixed", "location"][index // 20]
+        step = 2 + (index // 12) % 5
+        sequence = [symbols[(index * 3 + offset * step + offset // 2) % len(symbols)] for offset in range(length)]
+        answer = " — ".join(sequence)
+        reverse, rotate = " — ".join(reversed(sequence)), " — ".join(sequence[2:] + sequence[:2])
+        swap = sequence[:]
+        swap[1], swap[2] = swap[2], swap[1]
+        options, key = _place_correct(answer, [reverse, rotate, " — ".join(swap)], index)
+        items.append(_item(f"MEM-{21 + index:03d}", "working_memory", f"memory_update_{index % 10:02d}", f"Study this {context} sequence for three seconds. It will disappear. Which option matches the sequence exactly? {answer}", options, key, "The correct response preserves every symbol and its position; distractors target reversal, rotation, and adjacent swaps.", "memory", construct="short_term_order_memory"))
     return items
 
 
 def speed_items() -> List[Dict[str, Any]]:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
     items: List[Dict[str, Any]] = []
-    for index in range(1, GENERATED_PER_DOMAIN + 1):
-        target = f"{index:03d}{(index * 7 + 3) % 10}"
-        variants = [target[::-1], f"{target[0]}{target[2]}{target[1]}{target[3]}", f"{target[:3]}{(int(target[3]) + 1) % 10}"]
+    for index in range(100):
+        rng = random.Random(f"{FACTORY_SEED}:speed:{index}")
+        target = "".join(rng.choice(alphabet) for _ in range(5))
+        candidates = [target[::-1], target[:2] + target[3] + target[2] + target[4], target[:4] + alphabet[(alphabet.index(target[4]) + 1) % len(alphabet)]]
         distractors: List[str] = []
-        for variant in variants:
-            if variant != target and variant not in distractors:
-                distractors.append(variant)
-        while len(distractors) < 3:
-            candidate = f"{target[1:]}{len(distractors)}"
+        for candidate in candidates:
             if candidate != target and candidate not in distractors:
                 distractors.append(candidate)
+        cursor = 0
+        while len(distractors) < 3:
+            replacement = alphabet[(alphabet.index(target[cursor % 5]) + cursor + 1) % len(alphabet)]
+            candidate = target[:cursor % 5] + replacement + target[cursor % 5 + 1:]
+            if candidate != target and candidate not in distractors:
+                distractors.append(candidate)
+            cursor += 1
         options, key = _place_correct(target, distractors, index)
-        prompt = f"Visual search {index}: find the exact match for target code {target}."
-        explanation = "Only the exact match preserves every character in the same position."
-        items.append(_item(f"SPD-{20 + index:03d}", "processing_speed", f"speed_factory_{index % 32:02d}", prompt, options, key, explanation, "speed"))
+        items.append(_item(f"SPD-{21 + index:03d}", "processing_speed", f"speed_exact_match_{index % 10:02d}", f"Compare the target with the four codes. Which option is an exact match? Target: {target}", options, key, "Only the exact match keeps all five symbols in the same positions; distractors contain a transposition, one substitution, or reversal.", "speed", construct="visual_exact_matching"))
     return items
 
 
@@ -401,7 +208,11 @@ def _assert_unique(items: Iterable[Dict[str, Any]]) -> None:
     if len({item["id"] for item in records}) != len(records):
         raise ValueError("Generated item IDs must be unique")
     if len({item["prompt"] for item in records}) != len(records):
-        raise ValueError("Generated prompts must be unique")
+        seen: set[str] = set()
+        for item in records:
+            if item["prompt"] in seen:
+                raise ValueError(f"Generated prompts must be unique: {item['id']} :: {item['prompt']}")
+            seen.add(item["prompt"])
 
 
 def generated_items() -> List[Dict[str, Any]]:

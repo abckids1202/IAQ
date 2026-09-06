@@ -195,3 +195,27 @@ class PostgresAssessmentStore:
                     "confidence": row[3], "quality": quality, "answered_count": row[6], "question_count": row[5], "duration_seconds": 2100,
                     "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4],
                 }
+
+    def store_report_delivery(self, delivery: Dict[str, Any]) -> None:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO report_delivery_requests (id, result_id, name, email, consent_version, status, provider, requested_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (result_id, email) DO NOTHING
+                    """,
+                    (delivery["id"], delivery["result_id"], delivery["name"], delivery["email"], delivery["consent_version"], delivery["status"], delivery["provider"], delivery["requested_at"]),
+                )
+
+    def get_report_delivery(self, result_id: str, email: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, result_id, name, email, consent_version, status, provider, requested_at, sent_at FROM report_delivery_requests WHERE result_id = %s AND email = %s",
+                    (result_id, email),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return {"id": str(row[0]), "result_id": str(row[1]), "name": row[2], "email": row[3], "consent_version": row[4], "status": row[5], "provider": row[6], "requested_at": row[7].isoformat() if row[7] else None, "sent_at": row[8].isoformat() if row[8] else None}

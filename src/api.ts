@@ -114,3 +114,16 @@ export async function finishAssessment(sessionId: string): Promise<AssessmentRes
 export async function getAssessmentResult(resultId: string): Promise<AssessmentResult> {
   return normalizeResult(await request<ApiResult>(`/results/${resultId}`))
 }
+
+export type ReportDelivery = {
+  id: string
+  result_id: string
+  name: string
+  email: string
+  status: string
+  requested_at: string
+}
+
+export async function requestReportDelivery(resultId: string, payload: { name: string; email: string; granted: boolean; age?: number }): Promise<ReportDelivery> {
+  return request<ReportDelivery>(`/results/${resultId}/delivery`, { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'REPORT-DELIVERY-1.0' }) })
+}
