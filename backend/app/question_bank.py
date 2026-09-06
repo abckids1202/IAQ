@@ -195,6 +195,9 @@ SPEED: List[Dict[str, Any]] = [
 ]
 
 
+MINIMUM_ITEMS_PER_DOMAIN = 20
+TARGET_ITEMS_PER_DOMAIN = 120
+
 QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED + generated_items()
 
 

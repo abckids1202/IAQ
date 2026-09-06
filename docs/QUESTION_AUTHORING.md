@@ -2,7 +2,7 @@
 
 IAQ uses human-designed item families and deterministic generators for visual, numerical, and symbolic content. An independent solver and duplicate checks should verify each generated variant before human review.
 
-The current seed bank is a 280-item pilot set with 40 candidates for each of the seven intelligence aspects. Items are tagged `medium_hard`, `PILOT`, and either `REVIEWED_CONTENT` or `ORIGINAL_GENERATED` to make the intended difficulty and lifecycle visible without implying calibration. The form builder samples 8 per domain for a complete attempt. Generated candidates include a reproducible factory run and parameter record; they still require human review before promotion.
+The current seed bank is an 840-item pilot set with 120 candidates for each of the seven intelligence aspects. Items are tagged `medium_hard`, `PILOT`, and either `REVIEWED_CONTENT` or `ORIGINAL_GENERATED` to make the intended difficulty and lifecycle visible without implying calibration. The form builder samples 8 per domain for a complete attempt. Generated candidates include a reproducible factory run and parameter record; they still require human review before promotion.
 
 AI may help with wording alternatives, distractor suggestions, reading-level checks, similarity, and bias prompts. AI cannot approve content, change answer keys, create psychometric evidence, or alter numerical scores.
 

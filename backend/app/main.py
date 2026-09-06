@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
-from .question_bank import QUESTION_BANK, bank_counts, bank_is_ready
+from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready
 from .persistence import PostgresAssessmentStore
 
 app = FastAPI(title="IAQ API", version="0.1.0", description="Experimental educational profile API")
@@ -432,8 +432,8 @@ def question_bank_summary() -> Dict[str, Any]:
     """Expose safe operational metadata for the question-studio dashboard."""
     return {
         "total": len(ITEMS),
-        "minimum_per_domain": 20,
-        "target_per_domain": 40,
+        "minimum_per_domain": MINIMUM_ITEMS_PER_DOMAIN,
+        "target_per_domain": TARGET_ITEMS_PER_DOMAIN,
         "counts": bank_counts(),
         "ready": bank_is_ready(),
         "form_sizes": {"quick": 14, "complete": 56},

@@ -33,7 +33,7 @@ def test_quality_flags_rapid_and_interruptions():
 
 def test_question_bank_has_balanced_complete_forms_and_hides_keys():
     form = create_randomized_form("complete")
-    assert len(ITEMS) == 280
+    assert len(ITEMS) == 840
     assert len(form) == 56
     assert len(set(form)) == 56
     assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
@@ -54,7 +54,11 @@ def test_question_bank_randomizes_between_sessions():
 
 def test_question_bank_has_reviewable_generation_metadata():
     generated = [item for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"]
-    assert len(generated) == 140
+    assert len(generated) == 700
+    assert set(Counter(item["domain"] for item in generated).values()) == {100}
+    assert len({item["prompt"] for item in generated}) == len(generated)
+    assert all(item["status"] == "PILOT" for item in generated)
+    assert all(item["options"].count(item["answer"]) == 1 for item in generated)
     assert all(item["generation_run_id"] for item in generated)
     assert all(item["difficulty_estimate"] is None for item in generated)
 

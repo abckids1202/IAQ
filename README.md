@@ -8,7 +8,7 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 
 - React + TypeScript + Vite product shell with editorial dashboard UI.
 - Student flow: a results-first seven-domain cognitive session, a server-enforced 35-minute timer, Compass, Tracker, evidence prompts, saved majors, and a private printable report.
-- Question bank: 280 pilot items, with 40 deterministic/reviewable candidates in each intelligence aspect. A complete test selects 8 items per aspect (56 total), avoids duplicate item families within a session, and randomizes the order for every session.
+- Question bank: 840 pilot items, with 120 deterministic/reviewable candidates in each intelligence aspect. A complete test selects 8 items per aspect (56 total), avoids duplicate item families within a session, and randomizes the order for every session.
 - Counselor workspace with consent-aware student states and anonymized cohort summaries.
 - Administrator item studio with lifecycle states, item health flags, response counts, and protected answer-key preview.
 - FastAPI service boundary with server-side response scoring, idempotent response submission, session events, RIASEC scoring, transparent major matching, tracker endpoints, and role-oriented endpoints.
@@ -48,7 +48,7 @@ $env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # Pow
 python -m app.seed
 ```
 
-The seed command is idempotent. It creates the 280 reviewed/generated pilot item
+The seed command is idempotent. It creates the 840 reviewed/generated pilot item
 records and their version-1 answer keys in PostgreSQL; version conflicts are not
 silently overwritten. Without `IAQ_DATABASE_URL`, `python -m app.seed` prints the
 bank summary used by the dependency-light local API.

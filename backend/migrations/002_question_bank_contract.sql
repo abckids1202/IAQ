@@ -12,4 +12,4 @@ CREATE INDEX IF NOT EXISTS item_versions_item_created_idx
     ON item_versions (item_id, created_at);
 
 COMMENT ON TABLE items IS
-    'IAQ item bank. The pilot baseline currently contains 280 pilot-ready items, 40 per cognitive domain.';
+    'IAQ item bank. The pilot baseline currently contains 840 pilot-ready items, 120 per cognitive domain.';
