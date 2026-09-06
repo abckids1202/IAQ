@@ -13,6 +13,8 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 - Administrator item studio with lifecycle states, item health flags, response counts, and protected answer-key preview.
 - FastAPI service boundary with server-side response scoring, idempotent response submission, session events, RIASEC scoring, transparent major matching, tracker endpoints, and role-oriented endpoints.
 - PostgreSQL-backed assessment/session/result persistence when `IAQ_DATABASE_URL` is configured, plus dependency-light local demo behavior.
+- Provider-neutral identity and commerce workflow: development sign-in for each role, server-side permission maps, backend-driven IDR products, order snapshots, mock hosted-checkout state, verified sandbox settlement, and explicit entitlements.
+- Optional account, pricing, checkout, payment-status, billing, and settings routes. Production Supabase/Google/Midtrans activation remains disabled until credentials, merchant approval, MFA, consent, and legal review are complete.
 - Product, assessment, privacy, pilot, deployment, and data dictionary documentation in `docs/`.
 
 ## Run the frontend
@@ -35,6 +37,8 @@ python -m venv .venv
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
+
+For the local access workflow, copy `.env.example` to `.env` if desired and keep `IAQ_AUTH_MODE=development`. Open `/auth/login` and choose a seeded role. The student account has development assessment access; the guardian account can create a sandbox purchase for `demo-student`. Payment access is granted only after clicking the sandbox settlement action and receiving the server-confirmed `fulfilled` state.
 
 PostgreSQL (recommended for durable sessions and results):
 
@@ -76,6 +80,8 @@ The local UI includes seeded views rather than production authentication:
 | Student | Ari Pratama | Assessment, Compass, Tracker, report |
 | Counselor | `/school` | Authorized follow-up and anonymized cohort view |
 | Administrator | `/admin` | Item review and health dashboard |
+
+Additional workflow routes are `/auth/login`, `/pricing`, `/checkout/iaq-complete`, `/app/billing`, and `/app/settings/profile`. The local development provider is intentionally not a production auth system. See [docs/AUTH_ARCHITECTURE.md](docs/AUTH_ARCHITECTURE.md), [docs/PAYMENT_ARCHITECTURE.md](docs/PAYMENT_ARCHITECTURE.md), and [docs/ENTITLEMENT_MODEL.md](docs/ENTITLEMENT_MODEL.md).
 
 Production must replace demo mode with token validation and server-side role checks. No demo credentials should be used for real student data.
 

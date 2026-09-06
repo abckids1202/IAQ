@@ -31,11 +31,12 @@ type ApiResult = {
   disclaimer: string
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), 8000)
   try {
-    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) } })
+    const sessionToken = typeof window !== 'undefined' ? localStorage.getItem('iaq-session-token') : null
+    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(sessionToken ? { 'X-IAQ-Session': sessionToken } : {}), ...(init?.headers || {}) } })
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as { detail?: string }
       throw new Error(body.detail || `IAQ API ${response.status}`)
@@ -130,4 +131,88 @@ export async function requestReportDelivery(resultId: string, payload: { name: s
 
 export async function submitFeedback(payload: { message: string; page: string; email?: string }): Promise<{ accepted: boolean; id: string }> {
   return request<{ accepted: boolean; id: string }>('/feedback', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export type AccessUser = {
+  id: string
+  email: string
+  display_name: string
+  roles: string[]
+  account_status: string
+  age_band: string
+  school_id?: string | null
+  mfa_verified: boolean
+}
+
+export type Product = {
+  id: string
+  code: string
+  name: string
+  description: string
+  price_id: string
+  amount_minor: number
+  currency: string
+  active: boolean
+}
+
+export type Order = {
+  id: string
+  order_number: string
+  purchaser_user_id: string
+  beneficiary_user_id: string
+  product_id: string
+  product_snapshot: Product
+  price_snapshot: { amount_minor: number; currency: string }
+  total_minor: number
+  currency: string
+  status: string
+  created_at: string
+}
+
+export async function devLogin(user: string): Promise<{ session_token: string; user: AccessUser; permissions: string[] }> {
+  const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/dev/login', { method: 'POST', body: JSON.stringify({ user }) })
+  localStorage.setItem('iaq-session-token', result.session_token)
+  localStorage.setItem('iaq-user', JSON.stringify(result.user))
+  return result
+}
+
+export async function requestOtp(email: string): Promise<{ accepted: boolean; development_code?: string }> {
+  return request('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email }) })
+}
+
+export async function verifyOtp(email: string, code: string): Promise<{ session_token: string; user: AccessUser; permissions: string[] }> {
+  const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email, code }) })
+  localStorage.setItem('iaq-session-token', result.session_token)
+  localStorage.setItem('iaq-user', JSON.stringify(result.user))
+  return result
+}
+
+export async function logout(): Promise<void> {
+  await request('/auth/logout', { method: 'POST' }).catch(() => undefined)
+  localStorage.removeItem('iaq-session-token')
+  localStorage.removeItem('iaq-user')
+}
+
+export async function getCurrentUser(): Promise<AccessUser> {
+  return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
+}
+
+export async function listProducts(): Promise<Product[]> {
+  return request<{ products: Product[] }>('/products').then((result) => result.products)
+}
+
+export async function createOrder(productId: string, beneficiaryUserId?: string): Promise<Order> {
+  return request<Order>('/orders', { method: 'POST', body: JSON.stringify({ product_id: productId, beneficiary_user_id: beneficiaryUserId }) })
+}
+
+export async function beginCheckout(orderId: string): Promise<{ order: Order; payment_attempt: { id: string; status: string; provider: string } | null; message: string }> {
+  return request(`/orders/${orderId}/checkout`, { method: 'POST' })
+}
+
+export async function settleMockPayment(orderId: string): Promise<{ order: Order; verified: boolean; entitlement_created: boolean }> {
+  return request(`/payments/mock/${orderId}/settle`, { method: 'POST' })
+}
+
+export async function getOrderStatus(orderId: string): Promise<{ order: Order; payment_attempt: { status: string } | null; entitlements: { code: string; status: string }[] }> {
+  return request(`/orders/${orderId}/status`)
 }

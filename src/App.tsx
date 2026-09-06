@@ -4,6 +4,7 @@ import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, Res
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
 import { finishAssessment, requestReportDelivery, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment, submitFeedback } from './api'
+import { AccountSettings, AuthCallback, AuthLogin, Billing, Checkout, PaymentPage, Pricing } from './access'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
@@ -138,6 +139,25 @@ function App() {
   const quietMode = location.pathname === '/assess/session'
   return <><AppBootLoader active={booting} /><ScrollProgress /><CursorFollower /><Routes>
     <Route path="/welcome" element={<PublicSite />} />
+    <Route path="/auth/login" element={<AuthLogin />} />
+    <Route path="/auth/register" element={<AuthLogin />} />
+    <Route path="/auth/callback" element={<AuthCallback />} />
+    <Route path="/auth/verify" element={<AuthCallback />} />
+    <Route path="/auth/onboarding" element={<AuthLogin />} />
+    <Route path="/auth/invitation" element={<AuthLogin />} />
+    <Route path="/auth/guardian-consent" element={<AuthLogin />} />
+    <Route path="/auth/mfa/enroll" element={<AuthCallback />} />
+    <Route path="/auth/mfa/challenge" element={<AuthCallback />} />
+    <Route path="/auth/error" element={<AuthCallback />} />
+    <Route path="/pricing" element={<StudentAppShell profile={profile}><Pricing /></StudentAppShell>} />
+    <Route path="/checkout/:productId" element={<StudentAppShell profile={profile}><Checkout /></StudentAppShell>} />
+    <Route path="/checkout/:orderId/pay" element={<StudentAppShell profile={profile}><PaymentPage /></StudentAppShell>} />
+    <Route path="/payment/:orderId/:state" element={<StudentAppShell profile={profile}><PaymentPage /></StudentAppShell>} />
+    <Route path="/app/billing" element={<StudentAppShell profile={profile}><Billing /></StudentAppShell>} />
+    <Route path="/app/settings/profile" element={<StudentAppShell profile={profile}><AccountSettings /></StudentAppShell>} />
+    <Route path="/app/settings/security" element={<StudentAppShell profile={profile}><AccountSettings /></StudentAppShell>} />
+    <Route path="/app/settings/privacy" element={<StudentAppShell profile={profile}><Privacy /></StudentAppShell>} />
+    <Route path="/app/settings/sessions" element={<StudentAppShell profile={profile}><AccountSettings /></StudentAppShell>} />
     <Route path="/" element={<StudentAppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></StudentAppShell>} />
     <Route path="/assess" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
     <Route path="/assess/session" element={<Assessment onComplete={completeAssessment} />} />
@@ -174,7 +194,7 @@ function WorkspaceSwitcher({ active }: { active: string }) {
 }
 
 function ProfileMenu({ profile, label }: { profile?: Profile; label: string }) {
-  return <details className="profile-menu"><summary><div className="avatar">AP</div><div><strong>{profile?.name || 'Ari Pratama'}</strong><span>{label}</span></div><span className="profile-chevron">⌄</span></summary><div className="profile-popover"><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Privacy</Link><Link to="/welcome">Sign out</Link></div></details>
+  return <details className="profile-menu"><summary><div className="avatar">AP</div><div><strong>{profile?.name || 'Ari Pratama'}</strong><span>{label}</span></div><span className="profile-chevron">⌄</span></summary><div className="profile-popover"><Link to="/app/settings/profile">Account</Link><Link to="/app/billing">Plan & billing</Link><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Privacy</Link><Link to="/auth/login">Switch account</Link></div></details>
 }
 
 function StudentAppHeader({ profile }: { profile: Profile }) {
@@ -222,7 +242,7 @@ function PublicNavbar() {
     return () => window.removeEventListener('scroll', update)
   }, [])
   const links = [{ to: '/methodology', label: 'How it works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Explore directions' }, { to: '/welcome#schools', label: 'For schools' }, { to: '/methodology', label: 'Methodology' }]
-  return <header className={`public-navbar ${scrolled ? 'scrolled' : ''}`}><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><GlobalSearch compact /><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><ThemeToggle /><Link to="/assess" className="button primary magnetic">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}<GlobalSearch /></nav>}</header>
+  return <header className={`public-navbar ${scrolled ? 'scrolled' : ''}`}><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><GlobalSearch compact /><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/auth/login" className="public-sign-in">Sign in</Link><ThemeToggle /><Link to="/assess" className="button primary magnetic">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}<Link to="/auth/login" onClick={() => setMobileOpen(false)}>Sign in</Link><GlobalSearch /></nav>}</header>
 }
 
 function PublicSite() {

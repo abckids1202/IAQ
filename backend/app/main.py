@@ -11,16 +11,20 @@ from datetime import datetime, timedelta, timezone
 import os
 import random
 import re
+import hashlib
+import json
+import hmac
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
 from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready
 from .persistence import PostgresAssessmentStore
+from . import access
 
 app = FastAPI(title="IAQ API", version="0.1.0", description="Experimental educational profile API")
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):517[0-9]$", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -105,6 +109,66 @@ class FeedbackCreate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=254)
 
 
+class DevLoginCreate(BaseModel):
+    user: str = Field(default="demo-student", min_length=2, max_length=120)
+
+
+class OtpRequestCreate(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+
+
+class OtpVerifyCreate(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class OrderCreate(BaseModel):
+    product_id: str = Field(min_length=2, max_length=80)
+    beneficiary_user_id: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    school_id: Optional[str] = Field(default=None, min_length=2, max_length=120)
+
+
+class ConsentRecordCreate(BaseModel):
+    consent_version: str = Field(min_length=1, max_length=80)
+    purpose: str = Field(min_length=1, max_length=120)
+    granted: bool
+
+
+def _header_token(request: Optional[Request]) -> Optional[str]:
+    if not request:
+        return None
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return request.headers.get("x-iaq-session")
+
+
+def current_user(request: Optional[Request] = None) -> Dict[str, Any]:
+    """Resolve the authenticated identity for local or provider-backed calls.
+
+    Until Supabase is configured, no-token local requests intentionally resolve
+    to the seeded student account so the existing assessment preview remains
+    runnable. Production deployments must set IAQ_AUTH_MODE=supabase and reject
+    this fallback in their auth middleware.
+    """
+    user = access.user_for_token(_header_token(request))
+    if user:
+        return user
+    requested_user = request.headers.get("x-iaq-user") if request else None
+    if requested_user and os.getenv("IAQ_AUTH_MODE", "development") == "development":
+        return access.user_for_identifier(requested_user)
+    return access.USERS["demo-student"]
+
+
+def require_permission(user: Dict[str, Any], permission: str) -> None:
+    if permission not in access.permissions_for(user):
+        raise HTTPException(403, "You do not have permission to perform this action")
+
+
+def serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in order.items() if key not in {"payment_secret", "server_key"}}
+
+
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Return a strict student payload; internal provenance never leaves the API."""
     allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
@@ -157,6 +221,226 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "service": "iaq-api", "mode": "postgres" if PERSISTENCE else "development_demo"}
 
 
+@app.get("/auth/config")
+def auth_config() -> Dict[str, Any]:
+    """Expose safe feature flags; provider secrets never leave the server."""
+    return {
+        "mode": os.getenv("IAQ_AUTH_MODE", "development"),
+        "google_enabled": os.getenv("AUTH_GOOGLE_ENABLED", "false").lower() == "true",
+        "email_otp_enabled": os.getenv("AUTH_EMAIL_OTP_ENABLED", "true").lower() == "true",
+        "payments_enabled": os.getenv("PAYMENTS_ENABLED", "true").lower() == "true",
+        "payment_provider": "midtrans" if os.getenv("MIDTRANS_SERVER_KEY") else "mock",
+        "production_ready": False,
+    }
+
+
+@app.post("/auth/dev/login")
+def dev_login(payload: DevLoginCreate) -> Dict[str, Any]:
+    if os.getenv("IAQ_AUTH_MODE", "development") != "development":
+        raise HTTPException(404, "Development authentication is disabled")
+    user = access.user_for_identifier(payload.user)
+    if user["account_status"] != "active":
+        raise HTTPException(403, "This account is not active")
+    if "student" in user["roles"]:
+        access.add_entitlement(user["id"], "assessment.free.start", "development_seed", f"free:{user['id']}", quantity=99, granted_by="system")
+        access.add_entitlement(user["id"], "assessment.complete.start", "development_seed", f"complete:{user['id']}", quantity=99, granted_by="system")
+        access.add_entitlement(user["id"], "assessment.complete.report", "development_seed", f"report:{user['id']}", quantity=99, granted_by="system")
+    token = access.issue_dev_session(user["id"])
+    return {"session_token": token, "user": access.public_user(user), "permissions": access.permissions_for(user), "provider": "development"}
+
+
+@app.post("/auth/otp/request")
+def request_otp(payload: OtpRequestCreate) -> Dict[str, Any]:
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.email):
+        raise HTTPException(422, "Enter a valid email address")
+    # The local provider uses a fixed test code and never sends real email.
+    access.OTP_CODES[payload.email.lower()] = {"code": "123456", "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10)}
+    response: Dict[str, Any] = {"accepted": True, "delivery": "development_log", "expires_in_seconds": 600}
+    if os.getenv("IAQ_AUTH_MODE", "development") == "development":
+        response["development_code"] = "123456"
+    return response
+
+
+@app.post("/auth/otp/verify")
+def verify_otp(payload: OtpVerifyCreate) -> Dict[str, Any]:
+    record = access.OTP_CODES.get(payload.email.lower())
+    if not record or record["expires_at"] <= datetime.now(timezone.utc) or payload.code != record["code"]:
+        raise HTTPException(401, "That sign-in code is invalid or expired")
+    user = access.get_or_create_student(payload.email)
+    token = access.issue_dev_session(user["id"])
+    access.OTP_CODES.pop(payload.email.lower(), None)
+    return {"session_token": token, "user": access.public_user(user), "permissions": access.permissions_for(user), "provider": "development"}
+
+
+@app.post("/auth/logout")
+def logout(request: Request) -> Dict[str, bool]:
+    token = _header_token(request)
+    if token:
+        access.SESSIONS.pop(token, None)
+    return {"signed_out": True}
+
+
+@app.get("/me/roles")
+def me_roles(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    return {"user_id": user["id"], "roles": user["roles"], "active_role": user["roles"][0], "mfa_verified": user["mfa_verified"]}
+
+
+@app.get("/me/permissions")
+def me_permissions(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    return {"user_id": user["id"], "permissions": access.permissions_for(user)}
+
+
+@app.get("/me/entitlements")
+def me_entitlements(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    return {"entitlements": [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == user["id"]]}
+
+
+@app.get("/me/orders")
+def me_orders(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    return {"orders": [serialize_order(order) for order in access.orders_for(user["id"])]}
+
+
+@app.get("/products")
+def products() -> Dict[str, Any]:
+    return {"products": access.list_products(), "currency": "IDR", "payment_provider": "midtrans_sandbox" if os.getenv("MIDTRANS_SERVER_KEY") else "mock"}
+
+
+@app.get("/products/{product_id}")
+def product(product_id: str) -> Dict[str, Any]:
+    product_record = access.PRODUCTS.get(product_id)
+    if not product_record or not product_record["active"]:
+        raise HTTPException(404, "Product not found")
+    return {key: value for key, value in product_record.items() if key not in {"entitlement_code", "report_code"}}
+
+
+@app.post("/orders")
+def create_order(payload: OrderCreate, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    require_permission(user, "order.self.create")
+    try:
+        order = access.create_order(user["id"], payload.product_id, payload.beneficiary_user_id, payload.school_id)
+    except PermissionError as error:
+        raise HTTPException(403, str(error))
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return serialize_order(order)
+
+
+def _authorized_order(order: Dict[str, Any], user: Dict[str, Any]) -> None:
+    if user["id"] not in {order["purchaser_user_id"], order["beneficiary_user_id"]} and "platform_admin" not in user["roles"]:
+        raise HTTPException(404, "Order not found")
+
+
+@app.get("/orders/{order_id}")
+def get_order(order_id: str, request: Request) -> Dict[str, Any]:
+    order = access.ORDERS.get(order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    _authorized_order(order, current_user(request))
+    return serialize_order(order)
+
+
+@app.post("/orders/{order_id}/checkout")
+def checkout_order(order_id: str, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    order = access.ORDERS.get(order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    _authorized_order(order, user)
+    if order["status"] == "fulfilled":
+        return {"order": serialize_order(order), "payment_attempt": None, "message": "Access is already active."}
+    if os.getenv("PAYMENTS_ENABLED", "true").lower() != "true":
+        raise HTTPException(503, "Payments are not enabled")
+    return {"order": serialize_order(order), "payment_attempt": access.create_payment_attempt(order_id), "message": "Complete payment in the hosted checkout. The browser redirect does not grant access."}
+
+
+@app.get("/orders/{order_id}/status")
+def order_status(order_id: str, request: Request) -> Dict[str, Any]:
+    order = access.ORDERS.get(order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    _authorized_order(order, current_user(request))
+    attempt = next((item for item in access.PAYMENT_ATTEMPTS.values() if item["order_id"] == order_id), None)
+    return {"order": serialize_order(order), "payment_attempt": attempt, "entitlements": [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == order["beneficiary_user_id"] and item["source_id"] == order_id]}
+
+
+@app.post("/payments/mock/{order_id}/settle")
+def settle_mock_payment(order_id: str, request: Request) -> Dict[str, Any]:
+    if os.getenv("IAQ_AUTH_MODE", "development") != "development":
+        raise HTTPException(404, "Mock payment is disabled")
+    user = current_user(request)
+    try:
+        order = access.settle_mock_payment(order_id, user["id"])
+    except KeyError as error:
+        raise HTTPException(404, str(error))
+    except PermissionError as error:
+        raise HTTPException(403, str(error))
+    return {"order": serialize_order(order), "verified": True, "entitlement_created": order["status"] == "fulfilled"}
+
+
+@app.post("/payments/midtrans/notification")
+async def midtrans_notification(request: Request) -> Dict[str, Any]:
+    """Verify a sandbox notification before it can fulfill an order.
+
+    The payload follows Midtrans' notification fields. If no server key is
+    configured, notifications are rejected rather than silently trusted.
+    """
+    server_key = os.getenv("MIDTRANS_SERVER_KEY")
+    if not server_key:
+        raise HTTPException(503, "Midtrans sandbox is not configured")
+    payload = await request.json()
+    order_number = str(payload.get("order_id", ""))
+    status_code = str(payload.get("status_code", ""))
+    gross_amount = str(payload.get("gross_amount", ""))
+    signature = str(payload.get("signature_key", ""))
+    expected = hashlib.sha512(f"{order_number}{status_code}{gross_amount}{server_key}".encode()).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        raise HTTPException(400, "Invalid payment notification signature")
+    order = next((item for item in access.ORDERS.values() if item["order_number"] == order_number), None)
+    if not order:
+        raise HTTPException(404, "Unknown order reference")
+    if int(float(gross_amount)) != order["total_minor"] or payload.get("currency", order["currency"]) != order["currency"]:
+        raise HTTPException(400, "Payment amount or currency does not match the order")
+    event_key = f"midtrans:{payload.get('transaction_id', order_number)}:{payload.get('transaction_status', 'unknown')}"
+    if event_key not in access.PAYMENT_EVENTS:
+        access.PAYMENT_EVENTS[event_key] = {"id": event_key, "order_id": order["id"], "event_type": payload.get("transaction_status"), "signature_valid": True, "status": "processed", "received_at": NOW()}
+        if payload.get("transaction_status") in {"settlement", "capture"} and payload.get("fraud_status", "accept") == "accept":
+            access.fulfill_order(order["id"], "midtrans_payment")
+    return {"received": True, "processed": True, "order_status": order["status"]}
+
+
+@app.get("/schools/{school_id}/seats")
+def school_seats(school_id: str, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    if user.get("school_id") != school_id and "platform_admin" not in user["roles"]:
+        raise HTTPException(404, "School not found")
+    if not any(permission in access.permissions_for(user) for permission in ("school.seats.read", "admin.schools.manage")):
+        raise HTTPException(403, "School seat access is not allowed")
+    return access.school_seats(school_id)
+
+
+class SeatAllocateCreate(BaseModel):
+    student_id: str = Field(min_length=2, max_length=120)
+
+
+@app.post("/schools/{school_id}/seats/allocate")
+def allocate_school_seat(school_id: str, payload: SeatAllocateCreate, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    if user.get("school_id") != school_id and "platform_admin" not in user["roles"]:
+        raise HTTPException(404, "School not found")
+    require_permission(user, "school.seats.allocate")
+    if payload.student_id not in access.USERS or "student" not in access.USERS[payload.student_id]["roles"]:
+        raise HTTPException(422, "The beneficiary must be a known student account")
+    try:
+        return access.allocate_school_seat(school_id, payload.student_id, user["id"])
+    except ValueError as error:
+        raise HTTPException(409, str(error))
+
+
 @app.post("/feedback")
 def create_feedback(payload: FeedbackCreate) -> Dict[str, Any]:
     feedback = {"id": str(uuid4()), "message": payload.message.strip(), "page": payload.page, "email": payload.email.strip().lower() if payload.email else None, "created_at": NOW()}
@@ -167,8 +451,9 @@ def create_feedback(payload: FeedbackCreate) -> Dict[str, Any]:
 
 
 @app.get("/me")
-def me() -> Dict[str, Any]:
-    return {"id": "demo-student", "name": "Ari Pratama", "role": "student", "consented": True}
+def me(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    return {"id": user["id"], "name": user["display_name"], "email": user["email"], "roles": user["roles"], "role": user["roles"][0], "account_status": user["account_status"], "mfa_verified": user["mfa_verified"], "consented": True}
 
 
 @app.get("/assessments")
@@ -176,20 +461,27 @@ def assessments() -> List[Dict[str, Any]]:
     return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8}]
 
 
-@app.post("/assessments/{assessment_id}/sessions")
-def create_session(assessment_id: str, payload: SessionCreate) -> Dict[str, Any]:
+def create_session(assessment_id: str, payload: SessionCreate, request: Optional[Request] = None) -> Dict[str, Any]:
     if assessment_id != "iaq-cognitive":
         raise HTTPException(404, "Assessment version unavailable")
+    user = current_user(request)
+    if not access.has_entitlement(user["id"], "assessment.complete.start"):
+        raise HTTPException(402, "An IAQ Complete entitlement is required to start this assessment")
     session_id = str(uuid4())
     created_at = datetime.now(timezone.utc)
     deadline_at = created_at + timedelta(seconds=DURATION_SECONDS)
     item_order = create_randomized_form(payload.mode)
-    session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": "demo-student"}
+    session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": user["id"]}
     if PERSISTENCE:
         PERSISTENCE.create_session(session)
     else:
         SESSIONS[session_id] = session
     return {"id": session_id, "assessment_version": payload.assessment_version, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": 8 if payload.mode == "complete" else 2}
+
+
+@app.post("/assessments/{assessment_id}/sessions")
+def create_session_endpoint(assessment_id: str, payload: SessionCreate, request: Request) -> Dict[str, Any]:
+    return create_session(assessment_id, payload, request)
 
 
 @app.get("/sessions/{session_id}")
@@ -335,15 +627,26 @@ def submit_session(session_id: str) -> Dict[str, Any]:
     return RESULTS[result_id]
 
 
-@app.get("/results/{result_id}")
-def get_result(result_id: str) -> Dict[str, Any]:
+def get_result(result_id: str, request: Optional[Request] = None) -> Dict[str, Any]:
     if result_id in RESULTS:
-        return RESULTS[result_id]
+        result = RESULTS[result_id]
+        if request:
+            session = session_for(result["session_id"])
+            if session and session.get("user_id") != current_user(request)["id"] and "platform_admin" not in current_user(request)["roles"]:
+                raise HTTPException(404, "Result not found")
+        return result
     if PERSISTENCE:
         result = PERSISTENCE.get_result(result_id)
         if result:
+            if request and "platform_admin" not in current_user(request)["roles"] and result.get("user_id") not in {None, current_user(request)["id"]}:
+                raise HTTPException(404, "Result not found")
             return result
     raise HTTPException(404, "Result not found")
+
+
+@app.get("/results/{result_id}")
+def get_result_endpoint(result_id: str, request: Request) -> Dict[str, Any]:
+    return get_result(result_id, request)
 
 
 @app.get("/questionnaires")
@@ -425,12 +728,14 @@ def tracker() -> Dict[str, Any]:
 
 
 @app.get("/counselor/students")
-def counselor_students() -> Dict[str, Any]:
+def counselor_students(request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "school.students.read")
     return {"students": [{"id": "student-01", "name": "Lena Suryani", "consent": "granted", "assessment": "complete", "confidence": "high"}, {"id": "student-02", "name": "Fajar Kusuma", "consent": "granted", "assessment": "in_progress", "confidence": "pending"}]}
 
 
 @app.get("/admin/items")
-def admin_items(status: Optional[str] = Query(default=None), domain: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+def admin_items(request: Request, status: Optional[str] = Query(default=None), domain: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    require_permission(current_user(request), "content.items.read")
     items = list(ITEMS.values())
     if status:
         items = [item for item in items if item["status"] == status]
@@ -440,7 +745,8 @@ def admin_items(status: Optional[str] = Query(default=None), domain: Optional[st
 
 
 @app.get("/admin/items/{item_id}")
-def admin_item(item_id: str) -> Dict[str, Any]:
+def admin_item(item_id: str, request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "content.items.read")
     item = ITEMS.get(item_id)
     if not item:
         raise HTTPException(404, "Item not found")
@@ -448,7 +754,8 @@ def admin_item(item_id: str) -> Dict[str, Any]:
 
 
 @app.post("/admin/items/{item_id}/review")
-def review_item(item_id: str, payload: ItemReviewCreate) -> Dict[str, Any]:
+def review_item(item_id: str, payload: ItemReviewCreate, request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "content.items.review")
     item = ITEMS.get(item_id)
     if not item:
         raise HTTPException(404, "Item not found")
@@ -459,7 +766,9 @@ def review_item(item_id: str, payload: ItemReviewCreate) -> Dict[str, Any]:
     return {"accepted": True, "item": public_item(item)}
 
 
-def update_item_status(item_id: str, status: str) -> Dict[str, Any]:
+def update_item_status(item_id: str, status: str, request: Optional[Request] = None) -> Dict[str, Any]:
+    if request:
+        require_permission(current_user(request), "content.items.review")
     item = ITEMS.get(item_id)
     if not item:
         raise HTTPException(404, "Item not found")
@@ -469,23 +778,24 @@ def update_item_status(item_id: str, status: str) -> Dict[str, Any]:
 
 
 @app.post("/admin/items/{item_id}/activate")
-def activate_item(item_id: str) -> Dict[str, Any]:
-    return update_item_status(item_id, "ACTIVE")
+def activate_item(item_id: str, request: Request) -> Dict[str, Any]:
+    return update_item_status(item_id, "ACTIVE", request)
 
 
 @app.post("/admin/items/{item_id}/suspend")
-def suspend_item(item_id: str) -> Dict[str, Any]:
-    return update_item_status(item_id, "SUSPENDED")
+def suspend_item(item_id: str, request: Request) -> Dict[str, Any]:
+    return update_item_status(item_id, "SUSPENDED", request)
 
 
 @app.post("/admin/items/{item_id}/retire")
-def retire_item(item_id: str) -> Dict[str, Any]:
-    return update_item_status(item_id, "RETIRED")
+def retire_item(item_id: str, request: Request) -> Dict[str, Any]:
+    return update_item_status(item_id, "RETIRED", request)
 
 
-@app.get("/admin/question-bank/summary")
-def question_bank_summary() -> Dict[str, Any]:
+def question_bank_summary(request: Optional[Request] = None) -> Dict[str, Any]:
     """Expose safe operational metadata for the question-studio dashboard."""
+    if request:
+        require_permission(current_user(request), "content.health.read")
     lifecycle_counts: Dict[str, int] = {}
     origin_counts: Dict[str, int] = {}
     family_counts: Dict[str, int] = {}
@@ -511,3 +821,8 @@ def question_bank_summary() -> Dict[str, Any]:
         "unique_family_count": len(family_counts),
         "review_gate": "Generated candidates remain PILOT until human review and real pilot data support activation.",
     }
+
+
+@app.get("/admin/question-bank/summary")
+def question_bank_summary_endpoint(request: Request) -> Dict[str, Any]:
+    return question_bank_summary(request)
