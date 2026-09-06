@@ -21,8 +21,8 @@ DOMAINS = (
 
 @dataclass(frozen=True)
 class ScoreResult:
-    domain_scores: Dict[str, int]
-    composite: int
+    domain_scores: Dict[str, object]
+    composite: object
     confidence: str
     quality_warnings: List[str]
     domain_metrics: Dict[str, Dict[str, object]] = field(default_factory=dict)
@@ -50,12 +50,16 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         if int(response.get("response_time_ms", 10000) or 10000) < 1500:
             rapid += 1
         response_times[domain].append(int(response.get("response_time_ms", 10000) or 10000))
+    # A domain with too little evidence is explicitly unassessed. It must not
+    # become a flattering or punitive ability-looking number by accident.
+    minimum_items_for_interpretation = 4
     domain_scores = {
-        domain: round(50 + ((correct / total) * 45 if total else 0))
+        domain: round(50 + ((correct / total) * 45)) if total >= minimum_items_for_interpretation else None
         for domain, (correct, total) in totals.items()
     }
     answered = sum(pair[1] for pair in totals.values())
-    composite = round(sum(domain_scores.values()) / len(domain_scores)) if domain_scores else 50
+    interpretable_scores = [value for value in domain_scores.values() if isinstance(value, int)]
+    composite = round(sum(interpretable_scores) / len(interpretable_scores)) if len(interpretable_scores) >= 2 else None
     warnings: List[str] = []
     if answered < 7:
         warnings.append("incomplete_assessment")
@@ -74,6 +78,8 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
             "correct": correct,
             "accuracy": round((correct / total) * 100) if total else None,
             "median_response_time_ms": median,
+            "interpretation_eligible": total >= minimum_items_for_interpretation,
+            "evidence_note": None if total >= minimum_items_for_interpretation else f"Only {total} scored item(s) completed in this area.",
         }
     return ScoreResult(domain_scores, composite, confidence, warnings, domain_metrics)
 

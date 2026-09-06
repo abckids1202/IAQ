@@ -8,6 +8,7 @@ without changing the API contracts.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import secrets
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -120,6 +121,8 @@ SCHOOL_LICENCES: Dict[str, Dict[str, Any]] = {
 SEAT_ALLOCATIONS: Dict[str, Dict[str, Any]] = {
     "seat-demo-1": {"id": "seat-demo-1", "licence_id": "licence-demo", "school_id": "school-demo", "student_id": "demo-student", "status": "active", "created_at": now()}
 }
+INTEREST_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
+CERTIFICATES: Dict[str, Dict[str, Any]] = {}
 
 
 def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -206,6 +209,41 @@ def seed_demo_entitlements() -> None:
     add_entitlement("demo-student", "assessment.complete.start", "development_seed", "demo-complete-assessment", quantity=99, granted_by="system")
     add_entitlement("demo-student", "assessment.complete.report", "development_seed", "demo-complete-report", quantity=99, granted_by="system")
     add_entitlement("demo-student", "report.download", "development_seed", "demo-report-download", quantity=99, granted_by="system")
+
+
+def store_interest_attempt(user_id: str, responses: Dict[str, int]) -> Dict[str, Any]:
+    """Store an exploratory interest check-in separately from cognitive scoring."""
+    dimensions = ("R", "I", "A", "S", "E", "C")
+    scores = {dimension: max(0, min(100, int(responses.get(dimension, 0)))) for dimension in dimensions}
+    code = "".join(dimension for dimension, _ in sorted(scores.items(), key=lambda pair: pair[1], reverse=True)[:3])
+    attempt = {
+        "id": str(uuid4()), "user_id": user_id, "instrument": "RIASEC exploratory check-in",
+        "instrument_version": "RIASEC-EXPLORATORY-0.1", "scores": scores, "code": code,
+        "answered_count": len(responses), "data_origin": "REAL_PILOT", "status": "provisional", "created_at": now(),
+    }
+    INTEREST_ATTEMPTS[user_id] = attempt
+    record_audit(user_id, "interest_attempt.created", "interest_attempt", attempt["id"], {"instrument_version": attempt["instrument_version"]})
+    return attempt
+
+
+def issue_certificate(user_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    existing = next((item for item in CERTIFICATES.values() if item["user_id"] == user_id and item["result_id"] == result["id"] and item["status"] == "issued"), None)
+    if existing:
+        return existing
+    identifier = f"IAQ-{secrets.token_hex(5).upper()}"
+    certificate = {
+        "id": str(uuid4()), "certificate_identifier": identifier, "user_id": user_id, "result_id": result["id"],
+        "title": "IAQ Cognitive Profile completion", "assessment_version": result.get("assessment_version", "IAQ-COG-0.3"),
+        "score_version": result.get("score_version", "SCORING-V1"), "status": "issued", "issued_at": now(),
+        "verification_url": f"/verify?certificate={identifier}", "data_origin": "REAL_PILOT",
+    }
+    CERTIFICATES[certificate["id"]] = certificate
+    record_audit(user_id, "certificate.issued", "certificate", certificate["id"], {"result_id": result["id"]})
+    return certificate
+
+
+def certificate_for_identifier(identifier: str) -> Optional[Dict[str, Any]]:
+    return next((item for item in CERTIFICATES.values() if item["certificate_identifier"].upper() == identifier.strip().upper()), None)
 
 
 def create_order(purchaser_id: str, product_id: str, beneficiary_id: Optional[str] = None, school_id: Optional[str] = None) -> Dict[str, Any]:

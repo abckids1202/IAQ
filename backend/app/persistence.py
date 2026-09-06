@@ -191,7 +191,7 @@ class PostgresAssessmentStore:
                 quality = row[8] if isinstance(row[8], dict) else json.loads(row[8])
                 return {
                     "id": str(row[0]), "session_id": str(row[1]), "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "SCORING-V1",
-                    "composite": int(row[2]), "domain_scores": {domain: int(score) for _, domain, score in domain_rows}, "domain_metrics": metrics,
+                    "composite": int(row[2]) if row[2] is not None else None, "domain_scores": {domain: int(score) if score is not None else None for _, domain, score in domain_rows}, "domain_metrics": metrics,
                     "confidence": row[3], "quality": quality, "answered_count": row[6], "question_count": row[5], "duration_seconds": 2100,
                     "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4],
                 }

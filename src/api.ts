@@ -19,9 +19,9 @@ type ApiResult = {
   session_id: string
   assessment_version: string
   score_version: string
-  composite: number
-  domain_scores: Record<string, number>
-  domain_metrics: Record<string, { score: number; answered: number; correct: number; accuracy: number | null; median_response_time_ms: number | null; relative: string }>
+  composite: number | null
+  domain_scores: Record<string, number | null>
+  domain_metrics: Record<string, { score: number | null; answered: number; correct: number; accuracy: number | null; median_response_time_ms: number | null; relative: string; interpretation_eligible?: boolean; evidence_note?: string }>
   confidence: string
   quality: AssessmentResult['quality']
   answered_count: number
@@ -52,7 +52,7 @@ function normalize(item: ApiQuestion): Question {
 }
 
 function normalizeResult(result: ApiResult): AssessmentResult {
-  const domainScores = {} as Record<Domain, number>
+  const domainScores = {} as Record<Domain, number | null>
   const domainMetrics = {} as Record<Domain, DomainResult>
   Object.entries(result.domain_scores).forEach(([code, score]) => {
     const domain = domainLabels[code]
@@ -131,6 +131,35 @@ export async function requestReportDelivery(resultId: string, payload: { name: s
 
 export async function submitFeedback(payload: { message: string; page: string; email?: string }): Promise<{ accepted: boolean; id: string }> {
   return request<{ accepted: boolean; id: string }>('/feedback', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export type InterestItem = { id: string; label: string; dimension: string }
+export type InterestResult = { id?: string; status: string; scores: Record<string, number>; code?: string | null; instrument?: string; instrument_version?: string; created_at?: string }
+
+export async function getInterestQuestionnaire(): Promise<{ items: InterestItem[]; instructions: string; version: string }> {
+  return request('/questionnaires/compass-v1')
+}
+
+export async function getInterestResult(): Promise<InterestResult> {
+  return request('/me/interests')
+}
+
+export async function submitInterestResponses(responses: Record<string, number>): Promise<InterestResult> {
+  return request('/questionnaires/compass-v1/responses', { method: 'POST', body: JSON.stringify({ responses }) })
+}
+
+export type Certificate = { id: string; certificate_identifier: string; title: string; assessment_version: string; score_version: string; status: string; issued_at: string; verification_url: string }
+
+export async function issueCertificate(resultId: string): Promise<Certificate> {
+  return request('/certificates', { method: 'POST', body: JSON.stringify({ result_id: resultId }) })
+}
+
+export async function listCertificates(): Promise<Certificate[]> {
+  return request<{ certificates: Certificate[] }>('/certificates').then((result) => result.certificates)
+}
+
+export async function verifyCertificate(identifier: string): Promise<{ valid: boolean; status: string; certificate_identifier: string; title?: string; assessment_version?: string; issued_at?: string }> {
+  return request(`/certificates/verify/${encodeURIComponent(identifier)}`)
 }
 
 export type AccessUser = {

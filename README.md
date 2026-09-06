@@ -15,6 +15,7 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 - PostgreSQL-backed assessment/session/result persistence when `IAQ_DATABASE_URL` is configured, plus dependency-light local demo behavior.
 - Provider-neutral identity and commerce workflow: development sign-in for each role, server-side permission maps, backend-driven IDR products, order snapshots, mock hosted-checkout state, verified sandbox settlement, and explicit entitlements.
 - Optional account, pricing, checkout, payment-status, billing, and settings routes. Production Supabase/Google/Midtrans activation remains disabled until credentials, merchant approval, MFA, consent, and legal review are complete.
+- Results integrity workflow: an empty results state (no demo score), incomplete domains remain “not assessed,” optional interest check-in persistence, private completion certificates with a minimal public verification response, and development-only report-delivery status.
 - Product, assessment, privacy, pilot, deployment, and data dictionary documentation in `docs/`.
 
 ## Run the frontend
@@ -47,6 +48,8 @@ docker compose up -d postgres
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/001_initial.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/002_question_bank_contract.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/003_results_first_assessment.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/006_identity_commerce.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/007_reports_interests_certificates.sql
 cd backend
 $env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # PowerShell
 python -m app.seed
@@ -81,7 +84,7 @@ The local UI includes seeded views rather than production authentication:
 | Counselor | `/school` | Authorized follow-up and anonymized cohort view |
 | Administrator | `/admin` | Item review and health dashboard |
 
-Additional workflow routes are `/auth/login`, `/pricing`, `/checkout/iaq-complete`, `/app/billing`, and `/app/settings/profile`. The local development provider is intentionally not a production auth system. See [docs/AUTH_ARCHITECTURE.md](docs/AUTH_ARCHITECTURE.md), [docs/PAYMENT_ARCHITECTURE.md](docs/PAYMENT_ARCHITECTURE.md), and [docs/ENTITLEMENT_MODEL.md](docs/ENTITLEMENT_MODEL.md).
+Additional workflow routes are `/auth/login`, `/pricing`, `/checkout/iaq-complete`, `/app/billing`, `/app/settings/profile`, `/interests`, `/certificates`, and `/verify`. The local development provider is intentionally not a production auth system. See [docs/AUTH_ARCHITECTURE.md](docs/AUTH_ARCHITECTURE.md), [docs/PAYMENT_ARCHITECTURE.md](docs/PAYMENT_ARCHITECTURE.md), and [docs/ENTITLEMENT_MODEL.md](docs/ENTITLEMENT_MODEL.md).
 
 Production must replace demo mode with token validation and server-side role checks. No demo credentials should be used for real student data.
 

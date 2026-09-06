@@ -9,7 +9,8 @@ from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseC
 def test_domain_scoring_is_versioned_and_provisional():
     result = score_domains([{"item_id": "one", "answer": "A", "response_time_ms": 4000}], {"one": "abstract_reasoning"}, {"one": "A"})
     assert result.score_version == "SCORING-V1"
-    assert result.domain_scores["abstract_reasoning"] == 95
+    assert result.domain_scores["abstract_reasoning"] is None
+    assert result.domain_metrics["abstract_reasoning"]["interpretation_eligible"] is False
     assert result.confidence == "low"
 
 

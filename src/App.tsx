@@ -5,10 +5,11 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
 import { finishAssessment, requestReportDelivery, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment, submitFeedback } from './api'
 import { AccountSettings, AuthCallback, AuthLogin, Billing, Checkout, PaymentPage, Pricing } from './access'
+import { CertificateVerification, Certificates, InterestAssessment, LegalPage, PublicInfoPage } from './product'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
-  name: 'Ari Pratama', completed: true, consented: true, role: 'student', lastAssessment: '12 Aug 2026', nextAssessment: '12 May 2027', strengths: ['Visual-spatial reasoning', 'Abstract reasoning'], scores: initialScores
+  name: 'Ari Pratama', completed: false, consented: true, role: 'student', lastAssessment: '', nextAssessment: 'After enough new evidence', strengths: [], scores: initialScores
 }
 
 const ASSESSMENT_SESSION_KEY = 'iaq-active-assessment-session'
@@ -132,13 +133,20 @@ function App() {
 
   const toggleMajor = (name: string) => setSavedMajors((items) => items.includes(name) ? items.filter((item) => item !== name) : [...items, name])
   const completeAssessment = (result: AssessmentResult) => {
-    setProfile((current) => ({ ...current, completed: true, lastAssessment: new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), composite: result.composite, confidence: result.confidence, scores: result.domainScores, strengths: [...domains].sort((a, b) => result.domainScores[b] - result.domainScores[a]).slice(0, 2), lastResult: result }))
+    setProfile((current) => ({ ...current, completed: true, lastAssessment: new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), composite: result.composite, confidence: result.confidence, scores: result.domainScores, strengths: [...domains].filter((domain) => result.domainScores[domain] !== null).sort((a, b) => (result.domainScores[b] ?? -1) - (result.domainScores[a] ?? -1)).slice(0, 2), lastResult: result }))
     setAssessmentComplete(true)
   }
 
   const quietMode = location.pathname === '/assess/session'
   return <><AppBootLoader active={booting} /><ScrollProgress /><CursorFollower /><Routes>
     <Route path="/welcome" element={<PublicSite />} />
+    <Route path="/how-it-works" element={<PublicInfoPage kind="method" />} />
+    <Route path="/assessments" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
+    <Route path="/for-schools" element={<PublicInfoPage kind="schools" />} />
+    <Route path="/schools" element={<PublicInfoPage kind="schools" />} />
+    <Route path="/about" element={<PublicInfoPage kind="about" />} />
+    <Route path="/sample-report" element={<PublicInfoPage kind="sample" />} />
+    <Route path="/help" element={<PublicInfoPage kind="help" />} />
     <Route path="/auth/login" element={<AuthLogin />} />
     <Route path="/auth/register" element={<AuthLogin />} />
     <Route path="/auth/callback" element={<AuthCallback />} />
@@ -162,12 +170,17 @@ function App() {
     <Route path="/assess" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
     <Route path="/assess/session" element={<Assessment onComplete={completeAssessment} />} />
     <Route path="/compass" element={<StudentAppShell profile={profile}><Compass savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
+    <Route path="/interests" element={<StudentAppShell profile={profile}><InterestAssessment /></StudentAppShell>} />
+    <Route path="/certificates" element={<StudentAppShell profile={profile}><Certificates resultId={profile.lastResult?.id} /></StudentAppShell>} />
+    <Route path="/verify" element={<StudentAppShell profile={profile}><CertificateVerification /></StudentAppShell>} />
     <Route path="/tracker" element={<StudentAppShell profile={profile}><Tracker savedMajors={savedMajors} /></StudentAppShell>} />
     <Route path="/results" element={<StudentAppShell profile={profile}><Results profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
     <Route path="/school" element={<CounselorAppShell><School /></CounselorAppShell>} />
     <Route path="/admin" element={<AdminAppShell><Admin /></AdminAppShell>} />
     <Route path="/methodology" element={<StudentAppShell profile={profile}><Methodology /></StudentAppShell>} />
     <Route path="/privacy" element={<StudentAppShell profile={profile}><Privacy /></StudentAppShell>} />
+    <Route path="/terms" element={<StudentAppShell profile={profile}><LegalPage title="Terms for using IAQ" body="IAQ is an experimental educational product. Use it for reflection and planning, not for diagnosis, selection, or high-stakes decisions." /></StudentAppShell>} />
+    <Route path="/refunds" element={<StudentAppShell profile={profile}><LegalPage title="Refunds and access" body="Purchases, entitlements, and refund handling depend on the provider and order terms shown at checkout. Contact IAQ support with your order number." /></StudentAppShell>} />
     <Route path="*" element={<NotFound />} />
   </Routes>{!quietMode && <><BackToTop /><FeedbackButton /></>}</>
 }
@@ -181,7 +194,7 @@ const studentNav = [
 ]
 
 function pageName(pathname: string) {
-  const names: Record<string, string> = { '/': 'Overview', '/assess': 'Take a test', '/compass': 'Explore directions', '/tracker': 'Your progress', '/results': 'Your results', '/school': 'Overview', '/admin': 'Overview', '/methodology': 'Help & Methodology', '/privacy': 'Privacy' }
+  const names: Record<string, string> = { '/': 'Overview', '/assess': 'Take a test', '/compass': 'Explore directions', '/interests': 'Your interests', '/certificates': 'Certificates', '/tracker': 'Your progress', '/results': 'Your results', '/school': 'Overview', '/admin': 'Overview', '/methodology': 'Help & Methodology', '/privacy': 'Privacy' }
   return names[pathname] || pathname.slice(1).replaceAll('-', ' ')
 }
 
@@ -268,12 +281,12 @@ function LegacyHome({ profile, savedMajors }: { profile: Profile; savedMajors: s
 
 function Home({ profile }: { profile: Profile; savedMajors: string[] }) {
   const hasResult = Boolean(profile.lastResult)
-  const composite = profile.composite || Math.round(domains.reduce((total, domain) => total + profile.scores[domain], 0) / domains.length)
-  const ranked = [...domains].sort((a, b) => profile.scores[b] - profile.scores[a])
+  const composite = profile.composite ?? null
+  const ranked = [...domains].sort((a, b) => (profile.scores[b] ?? -1) - (profile.scores[a] ?? -1))
   return <div className="page home-page">
     <section className="compact-hero"><div><div className="eyebrow">IAQ / your starting point</div><h1>{hasResult ? <>Your result is ready.<br /><em>See what stands out.</em></> : <>Start with one test.<br /><em>See how you think.</em></>}</h1><p>{hasResult ? 'Read your private profile first. Explore directions only after you understand the evidence.' : 'A 35-minute assessment across seven thinking areas, followed by a clear visual report.'}</p></div><Link to={hasResult ? '/results' : '/assess'} className="button primary">{hasResult ? 'See my results' : 'Start test'} <span>→</span></Link></section>
     <div className="notice-bar compact-notice"><span className="notice-icon">i</span><span><strong>Private and provisional.</strong> This is an educational profile, not an official IQ score or diagnosis.</span><Link to="/methodology">How it works ↗</Link></div>
-    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? 'Your results / seven areas' : 'Your result / seven areas'}</div><h2>{hasResult ? 'A clear picture of your thinking' : 'Your report will appear here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Complete the test'}</span><strong>{hasResult ? <AnimatedNumber value={composite} /> : '—'}{hasResult && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : 'Seven domain scores, accuracy, and timing context.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? profile.scores[domain] : 0}%` }} /></i><strong>{hasResult ? profile.scores[domain] : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">The first step</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : 'Start the test.'}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>Test first. Results next. Directions after.</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>Take a test</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>See your results</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>Explore directions</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
+    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? 'Your results / seven areas' : 'Your result / seven areas'}</div><h2>{hasResult ? 'A clear picture of your thinking' : 'Your report will appear here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Complete the test'}</span><strong>{hasResult && composite !== null ? <AnimatedNumber value={composite} /> : '—'}{hasResult && composite !== null && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : 'Seven domain scores, accuracy, and timing context.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? (profile.scores[domain] ?? 0) : 0}%` }} /></i><strong>{hasResult ? (profile.scores[domain] ?? '—') : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">The first step</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : 'Start the test.'}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>Test first. Results next. Directions after.</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>Take a test</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>See your results</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>Explore directions</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
   </div>
 }
 
@@ -382,7 +395,19 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     setApiError('')
     try {
       const savedSessionId = window.sessionStorage.getItem(ASSESSMENT_SESSION_KEY)
-      const started = savedSessionId ? await resumeRandomizedAssessment(savedSessionId) : await startRandomizedAssessment()
+      let started
+      if (savedSessionId) {
+        try {
+          started = await resumeRandomizedAssessment(savedSessionId)
+        } catch {
+          // A browser can retain a session after a local API restart. That stale
+          // pointer must not prevent a student from starting a new assessment.
+          window.sessionStorage.removeItem(ASSESSMENT_SESSION_KEY)
+          started = await startRandomizedAssessment()
+        }
+      } else {
+        started = await startRandomizedAssessment()
+      }
       window.sessionStorage.setItem(ASSESSMENT_SESSION_KEY, started.sessionId)
       setApiSession(started.sessionId)
       setQuestion(started.question)
@@ -500,20 +525,22 @@ function ReportDeliveryCard({ resultId }: { resultId?: string }) {
 
 function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
   const result = profile.lastResult
-  const scores = result?.domainScores || profile.scores
-  const composite = result?.composite || profile.composite || Math.round(domains.reduce((total, domain) => total + scores[domain], 0) / domains.length)
-  const confidence = result?.confidence || profile.confidence || 'demo snapshot'
-  const ranked = [...domains].sort((a, b) => scores[b] - scores[a])
+  if (!result) return <div className="page results-empty"><PageIntro eyebrow="Your results / Private report" title={<>Your report starts<br /><em>after your test.</em></>} body="Complete the 35-minute assessment to see your actual answers, timing, and seven-domain profile." action={<Link className="button primary" to="/assess">Start test <span>→</span></Link>} /><section className="panel empty-report-panel"><div className="eyebrow">No scored result yet</div><h2>Nothing to compare yet.</h2><p>IAQ will never fill this report with a demo score. Your bars appear after a real session is submitted.</p><Link className="text-button" to="/methodology">Read how scoring works ↗</Link></section></div>
+  const scores = result.domainScores
+  const composite = result.composite
+  const confidence = result.confidence
+  const ranked = [...domains].sort((a, b) => (scores[b] ?? -1) - (scores[a] ?? -1))
   const metricFor = (domain: Domain) => result?.domainMetrics[domain]
   const formatTime = (milliseconds: number | null | undefined) => milliseconds ? `${(milliseconds / 1000).toFixed(1)}s median` : 'Timing not recorded'
-  const strongest = ranked.slice(0, 2).join(' and ')
-  const lower = ranked[ranked.length - 1]
+  const scored = ranked.filter((domain) => scores[domain] !== null)
+  const strongest = scored.length ? scored.slice(0, 2).join(' and ') : 'No domain has enough evidence yet'
+  const lower = scored.length ? scored[scored.length - 1] : null
   return <div className="page results-page">
     <PageIntro eyebrow="Your results / Private report" title={<>See your results.<br /><em>Understand your profile.</em></>} body="This is a snapshot of how your answers compared across seven thinking areas today. It is a starting point for reflection, not a fixed label." action={<button className="button primary" onClick={() => window.print()}>Print my report <span>↗</span></button>} />
-    <div className="result-disclaimer"><div className="disclaimer-mark">!</div><div><strong>Experimental IAQ Cognitive Profile / {composite}</strong><p>{result?.disclaimer || 'This demo result is provisional. It is not a clinical diagnosis or an officially normed IQ score.'}</p></div><Link to="/methodology">Read the method ↗</Link></div>
-    <div className="result-grid results-top-grid"><section className="panel cognitive-panel span-8"><div className="result-score-head"><div><div className="eyebrow">Your profile score / 0–100</div><div className="result-score">{composite}<span>/100</span></div></div><div className="result-meta"><span className="confidence-badge">{confidence} confidence</span><span>{result ? new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : profile.lastAssessment}</span><span>{result?.assessmentVersion || 'IAQ-COG-0.3'}</span></div></div><div className="profile-distribution"><div className="distribution-scale"><span>0</span><span>50</span><span>100</span></div>{ranked.map((domain) => { const metric = metricFor(domain); return <div className="distribution-row" key={domain}><div className="distribution-label"><span className={`domain-swatch ${domainMeta[domain].tone}`} /><strong>{domain}</strong><b>{scores[domain]}</b></div><div className="distribution-track"><i className={domainMeta[domain].tone} style={{ width: `${scores[domain]}%` }} /><span className="distribution-average" style={{ left: `${composite}%` }} aria-hidden="true" /></div><div className="distribution-detail"><span>{metric?.correct ?? '—'} of {metric?.answered ?? '—'} correct</span><span>{metric?.relative || 'relative to your profile'}</span></div></div> })}</div><div className="result-caption"><span><i className="legend-dot cobalt" /> your profile today</span><span><i className="legend-line" /> your average</span></div></section><aside className="panel result-context"><div className="eyebrow">Read the shape</div><h2>What stands out</h2><p className="result-lede"><strong>{strongest}</strong> are your strongest relative signals in this attempt.</p><div className="result-observation"><span className="observation-mark teal">+</span><div><strong>Strengths to notice</strong><p>These areas came through more strongly than the rest of your profile.</p></div></div><div className="result-observation"><span className="observation-mark coral">→</span><div><strong>More evidence needed</strong><p>{lower} is your lowest relative signal today. Treat it as a question to explore, not a verdict.</p></div></div><div className="result-context-foot"><span>Distribution is within your profile.</span><strong>No population percentile shown.</strong></div></aside></div>
+    <div className="result-disclaimer"><div className="disclaimer-mark">!</div><div><strong>Experimental IAQ Cognitive Profile / {composite ?? 'insufficient evidence'}</strong><p>{result.disclaimer}</p></div><Link to="/methodology">Read the method ↗</Link></div>
+    <div className="result-grid results-top-grid"><section className="panel cognitive-panel span-8"><div className="result-score-head"><div><div className="eyebrow">Your profile score / 0–100</div><div className="result-score">{composite ?? '—'}<span>{composite === null ? 'not enough evidence' : '/100'}</span></div></div><div className="result-meta"><span className="confidence-badge">{confidence} confidence</span><span>{new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span><span>{result.assessmentVersion}</span></div></div><div className="profile-distribution"><div className="distribution-scale"><span>0</span><span>50</span><span>100</span></div>{ranked.map((domain) => { const metric = metricFor(domain); const value = scores[domain]; return <div className="distribution-row" key={domain}><div className="distribution-label"><span className={`domain-swatch ${domainMeta[domain].tone}`} /><strong>{domain}</strong><b>{value ?? 'Not assessed'}</b></div><div className="distribution-track"><i className={domainMeta[domain].tone} style={{ width: `${value ?? 0}%` }} /><span className="distribution-average" style={{ left: `${composite ?? 0}%` }} aria-hidden="true" /></div><div className="distribution-detail"><span>{metric?.correct ?? 0} of {metric?.answered ?? 0} correct</span><span>{metric?.relative || 'insufficient evidence'}</span></div></div> })}</div><div className="result-caption"><span><i className="legend-dot cobalt" /> your profile today</span><span><i className="legend-line" /> your average</span></div></section><aside className="panel result-context"><div className="eyebrow">Read the shape</div><h2>What stands out</h2><p className="result-lede"><strong>{strongest}</strong> {scored.length ? 'came through as the strongest relative signals in this attempt.' : 'need more answered items before comparison is useful.'}</p><div className="result-observation"><span className="observation-mark teal">+</span><div><strong>Strengths to notice</strong><p>{scored.length ? 'These areas came through more strongly than the rest of your profile.' : 'Complete more items in each area before drawing conclusions.'}</p></div></div><div className="result-observation"><span className="observation-mark coral">→</span><div><strong>More evidence needed</strong><p>{lower ? `${lower} is the lowest relative signal today. Treat it as a question to explore, not a verdict.` : 'Every domain needs more evidence in this result.'}</p></div></div><div className="result-context-foot"><span>Distribution is within your profile.</span><strong>No population percentile shown.</strong></div></aside></div>
     <section className="result-evidence-strip"><div><span className="eyebrow">Questions answered</span><strong>{result ? `${result.answeredCount} / ${result.questionCount}` : 'Demo view'}</strong><span>balanced across seven areas</span></div><div><span className="eyebrow">Time limit</span><strong>{result ? `${Math.ceil(result.durationSeconds / 60)} minutes` : '35 minutes'}</strong><span>the test is time-limited</span></div><div><span className="eyebrow">How to read this</span><strong>Compare the bars</strong><span>not yourself with other people</span></div></section>
-    <div className="result-grid result-secondary-grid"><section className="panel secondary-result-panel span-7"><div className="eyebrow">Next, when you are ready</div><h2>Explore what fits you.</h2><p>After your thinking profile, interests and real experiences can add useful context to possible directions. They do not change this result.</p><div className="secondary-actions"><Link className="button secondary" to="/compass">Explore directions <span>→</span></Link><Link className="text-button" to="/tracker">Check your progress ↗</Link></div></section><section className="panel timing-panel span-5"><div className="eyebrow">How timing affected this snapshot</div><h2>{result?.quality?.status === 'acceptable' ? 'Your session looked steady.' : 'Keep timing in context.'}</h2><p>{result?.quality?.warnings?.length ? `The session recorded ${result.quality.warnings.length} quality note${result.quality.warnings.length > 1 ? 's' : ''}. That does not silently change your score, but it is useful context for reading the bars.` : 'No timing warning was recorded. Faster is not automatically better; accuracy and concentration both matter.'}</p><div className="timing-note"><span className="notice-icon">i</span><span>{result ? `Median response times are shown per domain. ${formatTime(metricFor(ranked[0])?.medianResponseTimeMs)}` : 'Complete the timed assessment to see response-time context here.'}</span></div></section></div><ReportDeliveryCard resultId={result?.id} />
+    <div className="result-grid result-secondary-grid"><section className="panel secondary-result-panel span-7"><div className="eyebrow">Next, when you are ready</div><h2>Explore what fits you.</h2><p>After your thinking profile, interests and real experiences can add useful context to possible directions. They do not change this result.</p><div className="secondary-actions"><Link className="button secondary" to="/interests">Tell us what you enjoy <span>→</span></Link><Link className="text-button" to="/compass">Explore directions ↗</Link></div></section><section className="panel timing-panel span-5"><div className="eyebrow">How timing affected this snapshot</div><h2>{result.quality?.status === 'acceptable' ? 'Your session looked steady.' : 'Keep timing in context.'}</h2><p>{result.quality?.warnings?.length ? `The session recorded ${result.quality.warnings.length} quality note${result.quality.warnings.length > 1 ? 's' : ''}. That does not silently change your score, but it is useful context for reading the bars.` : 'No timing warning was recorded. Faster is not automatically better; accuracy and concentration both matter.'}</p><div className="timing-note"><span className="notice-icon">i</span><span>{`Median response times are shown per domain. ${formatTime(metricFor(ranked[0])?.medianResponseTimeMs)}`}</span></div></section></div><ReportDeliveryCard resultId={result.id} />
   </div>
 }
 

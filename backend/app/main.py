@@ -62,6 +62,15 @@ MAJORS = [
     {"id": "psych", "slug": "psychology", "name": "Psychology", "family": "People & behaviour", "vector": {"verbal_reasoning": .8, "deductive_logic": .7, "abstract_reasoning": .6}},
 ]
 
+INTEREST_ITEMS = [
+    {"id": "R", "label": "I like building, fixing, or working with materials.", "dimension": "Realistic"},
+    {"id": "I", "label": "I like investigating why something works.", "dimension": "Investigative"},
+    {"id": "A", "label": "I like creating, designing, or expressing an idea.", "dimension": "Artistic"},
+    {"id": "S", "label": "I like helping people learn or solve problems.", "dimension": "Social"},
+    {"id": "E", "label": "I like persuading people or leading a project.", "dimension": "Enterprising"},
+    {"id": "C", "label": "I like organising information and making a plan work.", "dimension": "Conventional"},
+]
+
 
 class SessionCreate(BaseModel):
     assessment_version: str = "IAQ-COG-0.3"
@@ -101,6 +110,14 @@ class ReportDeliveryCreate(BaseModel):
     consent_version: str = Field(default="REPORT-DELIVERY-1.0", min_length=1, max_length=40)
     granted: bool = False
     age: Optional[int] = Field(default=None, ge=13, le=120)
+
+
+class InterestResponseCreate(BaseModel):
+    responses: Dict[str, int]
+
+
+class CertificateCreate(BaseModel):
+    result_id: str = Field(min_length=8, max_length=80)
 
 
 class FeedbackCreate(BaseModel):
@@ -615,7 +632,7 @@ def submit_session(session_id: str) -> Dict[str, Any]:
     domain_metrics = {}
     for domain, metric in score.domain_metrics.items():
         value = score.domain_scores[domain]
-        relative = "stronger than your average" if value > score.composite + 3 else "lower than your average" if value < score.composite - 3 else "close to your average"
+        relative = "insufficient evidence" if value is None or score.composite is None else "stronger than your average" if value > score.composite + 3 else "lower than your average" if value < score.composite - 3 else "close to your average"
         domain_metrics[domain] = {**metric, "score": value, "relative": relative}
     RESULTS[result_id] = {"id": result_id, "session_id": session_id, "assessment_version": session["assessment_version"], "score_version": score.score_version, "composite": score.composite, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER}
     if PERSISTENCE:
@@ -654,11 +671,27 @@ def questionnaires() -> List[Dict[str, Any]]:
     return [{"id": "compass-v1", "name": "IAQ Compass", "version": "RIASEC-PROVISIONAL-1", "sections": ["interests", "subjects", "work_values", "environment", "evidence", "constraints"]}]
 
 
-@app.post("/questionnaires/{questionnaire_id}/responses")
-def questionnaire_responses(questionnaire_id: str, payload: RiaSecPayload) -> Dict[str, Any]:
+@app.get("/questionnaires/{questionnaire_id}")
+def questionnaire(questionnaire_id: str) -> Dict[str, Any]:
     if questionnaire_id != "compass-v1":
         raise HTTPException(404, "Questionnaire not found")
-    return score_riasec(payload.responses)
+    return {"id": "compass-v1", "name": "Your interests", "version": "RIASEC-EXPLORATORY-0.1", "instructions": "Rate each statement from 0 (not like me) to 100 (very much like me). This is context, not a test.", "items": INTEREST_ITEMS}
+
+
+@app.post("/questionnaires/{questionnaire_id}/responses")
+def questionnaire_responses(questionnaire_id: str, payload: InterestResponseCreate, request: Request) -> Dict[str, Any]:
+    if questionnaire_id != "compass-v1":
+        raise HTTPException(404, "Questionnaire not found")
+    if set(payload.responses) - {item["id"] for item in INTEREST_ITEMS}:
+        raise HTTPException(422, "Unknown interest dimension")
+    if any(value < 0 or value > 100 for value in payload.responses.values()):
+        raise HTTPException(422, "Interest ratings must be between 0 and 100")
+    return access.store_interest_attempt(current_user(request)["id"], payload.responses)
+
+
+@app.get("/me/interests")
+def my_interests(request: Request) -> Dict[str, Any]:
+    return access.INTEREST_ATTEMPTS.get(current_user(request)["id"], {"status": "not_started", "scores": {}, "code": None})
 
 
 @app.post("/consents")
@@ -672,21 +705,19 @@ def majors() -> List[Dict[str, Any]]:
 
 
 @app.get("/recommendations")
-def recommendations() -> Dict[str, Any]:
-    latest = max(RESULTS.values(), key=lambda result: result.get("completed_at", ""), default=None)
-    cognitive = latest["domain_scores"] if latest else {domain: 50 for domain in DOMAINS}
-    interests = {"I": 92, "A": 78, "C": 65, "R": 42, "S": 35, "E": 28}
-    return {"version": "MATCH-V2", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, latest["answered_count"] if latest else 0, major["vector"]), "confidence": recommendation_confidence(latest["answered_count"] if latest else 0, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit using the latest persisted cognitive result and stated interests; not destiny", "warnings": ["experimental_profile", "no_population_norms"]}}
+def recommendations(request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    user_results = [result for result in RESULTS.values() if session_for(result["session_id"]) and session_for(result["session_id"]).get("user_id") == user["id"]]
+    latest = max(user_results, key=lambda result: result.get("completed_at", ""), default=None)
+    cognitive = ({domain: value if isinstance(value, int) else 50 for domain, value in latest["domain_scores"].items()} if latest else {domain: 50 for domain in DOMAINS})
+    interests = access.INTEREST_ATTEMPTS.get(user["id"], {}).get("scores", {"I": 50, "A": 50, "C": 50, "R": 50, "S": 50, "E": 50})
+    return {"version": "MATCH-V2", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, latest["answered_count"] if latest else 0, major["vector"]), "confidence": recommendation_confidence(latest["answered_count"] if latest else 0, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit using the latest persisted cognitive result and optional stated interests; not destiny", "warnings": ["experimental_profile", "no_population_norms", "try_real_experiences_before_deciding"]}}
 
 
 @app.post("/results/{result_id}/delivery")
-def request_report_delivery(result_id: str, payload: ReportDeliveryCreate) -> Dict[str, Any]:
+def request_report_delivery(result_id: str, payload: ReportDeliveryCreate, request: Request) -> Dict[str, Any]:
     """Queue an optional private report delivery after the score is visible."""
-    result = RESULTS.get(result_id)
-    if not result and PERSISTENCE:
-        result = PERSISTENCE.get_result(result_id)
-    if not result:
-        raise HTTPException(404, "Result not found")
+    result = get_result(result_id, request)
     if not payload.granted:
         raise HTTPException(400, "Report delivery consent is required")
     if payload.age is not None and payload.age < 18:
@@ -700,11 +731,41 @@ def request_report_delivery(result_id: str, payload: ReportDeliveryCreate) -> Di
     if existing:
         REPORT_DELIVERIES[key] = existing
         return existing
-    delivery = {"id": str(uuid4()), "result_id": result_id, "name": payload.name.strip(), "email": payload.email.strip().lower(), "consent_version": payload.consent_version, "status": "QUEUED", "provider": "development_log", "requested_at": NOW(), "sent_at": None}
+    delivery = {"id": str(uuid4()), "result_id": result_id, "name": payload.name.strip(), "email": payload.email.strip().lower(), "consent_version": payload.consent_version, "status": "QUEUED_DEV", "provider": "development_log", "requested_at": NOW(), "sent_at": None, "message": "Delivery recorded in development mode; no real email was sent."}
     REPORT_DELIVERIES[key] = delivery
     if PERSISTENCE:
         PERSISTENCE.store_report_delivery(delivery)
     return delivery
+
+
+@app.post("/certificates")
+def create_certificate(payload: CertificateCreate, request: Request) -> Dict[str, Any]:
+    result = get_result(payload.result_id, request)
+    if result.get("answered_count", 0) < 1:
+        raise HTTPException(409, "A certificate needs a submitted assessment")
+    return access.issue_certificate(current_user(request)["id"], result)
+
+
+@app.get("/certificates")
+def list_certificates(request: Request) -> Dict[str, Any]:
+    user_id = current_user(request)["id"]
+    return {"certificates": [item for item in access.CERTIFICATES.values() if item["user_id"] == user_id]}
+
+
+@app.get("/certificates/{certificate_id}")
+def get_certificate(certificate_id: str, request: Request) -> Dict[str, Any]:
+    certificate = access.CERTIFICATES.get(certificate_id)
+    if not certificate or (certificate["user_id"] != current_user(request)["id"] and "platform_admin" not in current_user(request)["roles"]):
+        raise HTTPException(404, "Certificate not found")
+    return certificate
+
+
+@app.get("/certificates/verify/{identifier}")
+def verify_certificate(identifier: str) -> Dict[str, Any]:
+    certificate = access.certificate_for_identifier(identifier)
+    if not certificate:
+        return {"valid": False, "status": "not_found", "certificate_identifier": identifier}
+    return {"valid": certificate["status"] == "issued", "status": certificate["status"], "certificate_identifier": certificate["certificate_identifier"], "title": certificate["title"], "assessment_version": certificate["assessment_version"], "issued_at": certificate["issued_at"]}
 
 
 @app.post("/majors/{major_id}/save")
