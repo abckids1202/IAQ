@@ -7,12 +7,12 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 ## What is included
 
 - React + TypeScript + Vite product shell with editorial dashboard UI.
-- Student flow: a resumable seven-domain cognitive session, results, Compass, Tracker, evidence prompts, saved majors, and printable report.
-- Question bank: 140 original medium-hard pilot items, with 20 items in each intelligence aspect. A complete test selects 8 fresh items per aspect (56 total) and randomizes their order for every session; the quick mode selects 2 per aspect (14 total).
+- Student flow: a results-first seven-domain cognitive session, a server-enforced 35-minute timer, Compass, Tracker, evidence prompts, saved majors, and a private printable report.
+- Question bank: 280 pilot items, with 40 deterministic/reviewable candidates in each intelligence aspect. A complete test selects 8 items per aspect (56 total), avoids duplicate item families within a session, and randomizes the order for every session.
 - Counselor workspace with consent-aware student states and anonymized cohort summaries.
 - Administrator item studio with lifecycle states, item health flags, response counts, and protected answer-key preview.
 - FastAPI service boundary with server-side response scoring, idempotent response submission, session events, RIASEC scoring, transparent major matching, tracker endpoints, and role-oriented endpoints.
-- PostgreSQL-oriented SQL migration contract plus dependency-light local demo behavior.
+- PostgreSQL-backed assessment/session/result persistence when `IAQ_DATABASE_URL` is configured, plus dependency-light local demo behavior.
 - Product, assessment, privacy, pilot, deployment, and data dictionary documentation in `docs/`.
 
 ## Run the frontend
@@ -36,23 +36,25 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional PostgreSQL:
+PostgreSQL (recommended for durable sessions and results):
 
 ```bash
 docker compose up -d postgres
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/001_initial.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/002_question_bank_contract.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/003_results_first_assessment.sql
 cd backend
 $env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # PowerShell
 python -m app.seed
 ```
 
-The seed command is idempotent. It creates the 140 reviewed item records and
-their version-1 answer keys in PostgreSQL; version conflicts are not silently
-overwritten. Without `IAQ_DATABASE_URL`, `python -m app.seed` prints the bank
-summary used by the dependency-light local API.
+The seed command is idempotent. It creates the 280 reviewed/generated pilot item
+records and their version-1 answer keys in PostgreSQL; version conflicts are not
+silently overwritten. Without `IAQ_DATABASE_URL`, `python -m app.seed` prints the
+bank summary used by the dependency-light local API.
 
-The frontend connects to the backend for randomized question sessions. If the API is unavailable, it falls back to the small local demo set so the interface remains previewable. Configure `VITE_API_BASE_URL` when connecting the UI to a different service.
+The frontend requires the backend for assessment sessions and real result data.
+Configure `VITE_API_BASE_URL` when connecting the UI to a different service.
 
 ## Verify
 

@@ -40,4 +40,38 @@ export type Profile = {
   nextAssessment: string
   strengths: Domain[]
   scores: Record<Domain, number>
+  composite?: number
+  confidence?: string
+  lastResult?: AssessmentResult
+}
+
+export type DomainResult = {
+  score: number
+  answered: number
+  correct: number
+  accuracy: number | null
+  medianResponseTimeMs: number | null
+  relative: string
+}
+
+export type AssessmentResult = {
+  id: string
+  sessionId: string
+  assessmentVersion: string
+  scoreVersion: string
+  composite: number
+  domainScores: Record<Domain, number>
+  domainMetrics: Record<Domain, DomainResult>
+  confidence: string
+  quality: {
+    status: string
+    rapidGuessingItems?: number
+    fatigueProbability?: number
+    warnings?: string[]
+  }
+  answeredCount: number
+  questionCount: number
+  durationSeconds: number
+  completedAt: string
+  disclaimer: string
 }

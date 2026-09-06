@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List
 
+from .item_factory import generated_items
+
 
 def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str], answer: str, explanation: str, kind: str = "choice") -> Dict[str, Any]:
     return {
@@ -21,10 +23,13 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         "answer": answer,
         "explanation": explanation,
         "difficulty_label": "medium_hard",
+        "difficulty_estimate": None,
         "lifecycle_status": "PILOT",
         "status": "PILOT",
         "data_origin": "REVIEWED_CONTENT",
         "content_version": 1,
+        "generation_run_id": None,
+        "generation_parameters": None,
     }
 
 
@@ -190,7 +195,7 @@ SPEED: List[Dict[str, Any]] = [
 ]
 
 
-QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED
+QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED + generated_items()
 
 
 def bank_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, int]:

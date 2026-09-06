@@ -5,7 +5,7 @@ same functions can be called from a transaction after validating a response.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 DOMAINS = (
@@ -25,6 +25,7 @@ class ScoreResult:
     composite: int
     confidence: str
     quality_warnings: List[str]
+    domain_metrics: Dict[str, Dict[str, object]] = field(default_factory=dict)
     score_version: str = "SCORING-V1"
 
 
@@ -35,6 +36,7 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     IRT estimate and must not be presented as a population percentile.
     """
     totals = {domain: [0, 0] for domain in DOMAINS}
+    response_times: Dict[str, List[int]] = {domain: [] for domain in DOMAINS}
     rapid = 0
     interruptions = 0
     for response in responses:
@@ -47,6 +49,7 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
             totals[domain][0] += 1
         if int(response.get("response_time_ms", 10000) or 10000) < 1500:
             rapid += 1
+        response_times[domain].append(int(response.get("response_time_ms", 10000) or 10000))
     domain_scores = {
         domain: round(50 + ((correct / total) * 45 if total else 0))
         for domain, (correct, total) in totals.items()
@@ -61,7 +64,18 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     if interruptions:
         warnings.append("session_interrupted")
     confidence = "high" if answered >= 12 and not warnings else "moderate" if answered >= 7 else "low"
-    return ScoreResult(domain_scores, composite, confidence, warnings)
+    domain_metrics = {}
+    for domain, (correct, total) in totals.items():
+        times = sorted(response_times[domain])
+        midpoint = len(times) // 2
+        median = None if not times else times[midpoint] if len(times) % 2 else round((times[midpoint - 1] + times[midpoint]) / 2)
+        domain_metrics[domain] = {
+            "answered": total,
+            "correct": correct,
+            "accuracy": round((correct / total) * 100) if total else None,
+            "median_response_time_ms": median,
+        }
+    return ScoreResult(domain_scores, composite, confidence, warnings, domain_metrics)
 
 
 def score_riasec(responses: Mapping[str, int]) -> Dict[str, object]:

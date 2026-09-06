@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
 import { finishAssessment, saveAndGetNext, startRandomizedAssessment } from './api'
-import type { Domain, Major, Profile, Question, Role } from './types'
+import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
   name: 'Ari Pratama', completed: true, consented: true, role: 'student', lastAssessment: '12 Aug 2026', nextAssessment: '12 May 2027', strengths: ['Visual-spatial reasoning', 'Abstract reasoning'], scores: initialScores
@@ -22,8 +22,8 @@ function App() {
   useEffect(() => { localStorage.setItem('iaq-assessment-complete', String(assessmentComplete)) }, [assessmentComplete])
 
   const toggleMajor = (name: string) => setSavedMajors((items) => items.includes(name) ? items.filter((item) => item !== name) : [...items, name])
-  const completeAssessment = (scores: Record<Domain, number>) => {
-    setProfile((current) => ({ ...current, completed: true, lastAssessment: '05 Sep 2026', scores, strengths: [...domains].sort((a, b) => scores[b] - scores[a]).slice(0, 2) }))
+  const completeAssessment = (result: AssessmentResult) => {
+    setProfile((current) => ({ ...current, completed: true, lastAssessment: new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), composite: result.composite, confidence: result.confidence, scores: result.domainScores, strengths: [...domains].sort((a, b) => result.domainScores[b] - result.domainScores[a]).slice(0, 2), lastResult: result }))
     setAssessmentComplete(true)
   }
 
@@ -45,14 +45,14 @@ function App() {
 
 const studentNav = [
   { to: '/', label: 'Overview', icon: '⌂', end: true },
-  { to: '/assess', label: 'Assessments', icon: '◈' },
-  { to: '/compass', label: 'Major Explorer', icon: '✦' },
-  { to: '/tracker', label: 'IAQ Tracker', icon: '◒' },
-  { to: '/results', label: 'Reports', icon: '↗' }
+  { to: '/assess', label: 'Take a test', icon: '◈' },
+  { to: '/results', label: 'Your results', icon: '↗' },
+  { to: '/compass', label: 'Explore directions', icon: '✦' },
+  { to: '/tracker', label: 'Your progress', icon: '◒' }
 ]
 
 function pageName(pathname: string) {
-  const names: Record<string, string> = { '/': 'Overview', '/assess': 'Assessments', '/compass': 'Major Explorer', '/tracker': 'IAQ Tracker', '/results': 'Reports', '/school': 'Overview', '/admin': 'Overview', '/methodology': 'Help & Methodology', '/privacy': 'Privacy' }
+  const names: Record<string, string> = { '/': 'Overview', '/assess': 'Take a test', '/compass': 'Explore directions', '/tracker': 'Your progress', '/results': 'Your results', '/school': 'Overview', '/admin': 'Overview', '/methodology': 'Help & Methodology', '/privacy': 'Privacy' }
   return names[pathname] || pathname.slice(1).replaceAll('-', ' ')
 }
 
@@ -73,8 +73,8 @@ function StudentAppHeader({ profile }: { profile: Profile }) {
 }
 
 function MobileStudentNavigation() {
-  const mobileNav = studentNav.slice(0, 4)
-  return <nav className="mobile-student-nav" aria-label="Mobile student navigation">{mobileNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `mobile-student-link ${isActive ? 'active' : ''}`}><span>{item.icon}</span>{item.label === 'Assessments' ? 'Assess' : item.label === 'Major Explorer' ? 'Explore' : item.label.replace('IAQ ', '')}</NavLink>)}</nav>
+  const mobileNav = [studentNav[0], studentNav[1], studentNav[3], studentNav[4]]
+  return <nav className="mobile-student-nav" aria-label="Mobile student navigation">{mobileNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `mobile-student-link ${isActive ? 'active' : ''}`}><span>{item.icon}</span>{item.label === 'Take a test' ? 'Test' : item.label === 'Explore directions' ? 'Explore' : item.label === 'Your progress' ? 'Progress' : 'Home'}</NavLink>)}</nav>
 }
 
 function StudentAppShell({ children, profile }: { children: React.ReactNode; profile: Profile }) {
@@ -105,8 +105,8 @@ function AdminAppShell({ children }: { children: React.ReactNode }) {
 
 function PublicNavbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
-  const links = [{ to: '/methodology', label: 'How IAQ Works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Major Exploration' }, { to: '/welcome#schools', label: 'For Schools' }, { to: '/methodology', label: 'Methodology' }]
-  return <header className="public-navbar"><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><Link to="/assess" className="button primary">Start Assessment <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}</nav>}</header>
+  const links = [{ to: '/methodology', label: 'How it works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Explore directions' }, { to: '/welcome#schools', label: 'For schools' }, { to: '/methodology', label: 'Methodology' }]
+  return <header className="public-navbar"><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/" className="public-sign-in">Sign in</Link><Link to="/assess" className="button primary">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}</nav>}</header>
 }
 
 function PublicSite() {
@@ -117,12 +117,12 @@ function PageIntro({ eyebrow, title, body, action }: { eyebrow: string; title: R
   return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1>{body && <p className="lede">{body}</p>}</div>{action && <div className="intro-action">{action}</div>}</div>
 }
 
-function Home({ profile, savedMajors }: { profile: Profile; savedMajors: string[] }) {
+function LegacyHome({ profile, savedMajors }: { profile: Profile; savedMajors: string[] }) {
   return <div className="page">
     <PageIntro eyebrow="Saturday, 05 September 2026 / 09:41" title={<>See how you think.<br /><em>Find what fits you.</em></>} body="Your profile brings together your thinking style, interests, and the things you have tried — so you can take a confident next step." action={<Link to="/results" className="button primary">See your potential <span>↗</span></Link>} />
     <div className="notice-bar"><span className="notice-icon">i</span><span><strong>Experimental profile.</strong> IAQ V1.0 results are educational and provisional. They are not a clinical diagnosis or an officially normed IQ score.</span><Link to="/methodology">Read methodology ↗</Link></div>
     <div className="dashboard-grid">
-      <section className="panel profile-panel span-7"><div className="panel-top"><div><div className="eyebrow">Your thinking profile</div><h2>How your mind works today</h2></div><span className="mono-label">IAQ-COG-0.3</span></div><div className="profile-summary"><div className="composite"><span>Early snapshot</span><strong>74<span>/100</span></strong><small>moderate confidence</small></div><div className="profile-chart"><ResponsiveContainer width="100%" height={190}><AreaChart data={domains.map((domain, i) => ({ name: domainMeta[domain].short, score: profile.scores[domain], baseline: 50 + (i % 3) * 3 }))} margin={{ left: 0, right: 0, top: 10, bottom: 0 }}><defs><linearGradient id="blueFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#315CFF" stopOpacity=".22" /><stop offset="100%" stopColor="#315CFF" stopOpacity="0" /></linearGradient></defs><CartesianGrid vertical={false} stroke="#e1ded5" strokeDasharray="2 4" /><XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: '#777973', fontSize: 10 }} /><YAxis domain={[0, 100]} hide /><Tooltip contentStyle={{ border: '1px solid #d7d2c7', borderRadius: 0, boxShadow: 'none', fontSize: 12 }} /><Area type="monotone" dataKey="baseline" stroke="#c9c4b8" strokeDasharray="4 4" fill="none" strokeWidth={1} /><Area type="monotone" dataKey="score" stroke="#315CFF" fill="url(#blueFill)" strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div><div className="panel-footer"><span>What stands out: <b>{profile.strengths.join(' + ')}</b></span><Link to="/results">See the full picture ↗</Link></div></section>
+      <section className="panel profile-panel span-7"><div className="panel-top"><div><div className="eyebrow">Your thinking profile</div><h2>How your mind works today</h2></div><span className="mono-label">IAQ-COG-0.3</span></div><div className="profile-summary"><div className="composite"><span>Early snapshot</span><strong>{profile.composite || 74}<span>/100</span></strong><small>{profile.confidence || 'moderate'} confidence</small></div><div className="profile-chart"><ResponsiveContainer width="100%" height={190}><AreaChart data={domains.map((domain) => ({ name: domainMeta[domain].short, score: profile.scores[domain] }))} margin={{ left: 0, right: 0, top: 10, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e1ded5" strokeDasharray="2 4" /><XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: '#777973', fontSize: 10 }} /><YAxis domain={[0, 100]} hide /><Tooltip contentStyle={{ border: '1px solid #d7d2c7', borderRadius: 0, boxShadow: 'none', fontSize: 12 }} /><Area type="monotone" dataKey="score" stroke="#315CFF" fill="#e5ebff" strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div><div className="panel-footer"><span>What stands out: <b>{profile.strengths.join(' + ')}</b></span><Link to="/results">See the full picture ↗</Link></div></section>
       <section className="panel direction-panel span-5"><div className="panel-top"><div><div className="eyebrow">Find your path</div><h2>Ideas for your future</h2></div><span className="sparkle">✦</span></div><div className="direction-list">{majors.slice(0, 3).map((major, index) => <div className="direction-row" key={major.name}><span className="rank">0{index + 1}</span><div className="direction-name"><strong>{major.name}</strong><span>{major.family}</span></div><div className="mini-bar"><span style={{ width: `${major.fit}%`, background: major.accent }} /></div><span className="score-mono">{major.fit}</span></div>)}</div><div className="panel-footer"><span>{savedMajors.length ? `${savedMajors.length} saved idea${savedMajors.length > 1 ? 's' : ''}` : 'Save a path to revisit'}</span><Link to="/compass">Explore ideas ↗</Link></div></section>
       <section className="panel evidence-panel span-4"><div className="eyebrow">Your evidence / 03</div><h2>Add what you have tried</h2><p className="muted">The more real experiences you add, the more useful your profile becomes.</p><div className="evidence-stack"><EvidenceRow label="School subjects" value="3 added" state="good" /><EvidenceRow label="Projects & activities" value="2 added" state="good" /><EvidenceRow label="Your reflections" value="1 pending" state="pending" /></div><button className="text-button">Add an experience <span>＋</span></button></section>
       <section className="panel steps-panel span-8"><div className="panel-top"><div><div className="eyebrow">Your next moves / This month</div><h2>Try one small thing next.</h2></div><Link to="/tracker" className="text-button">Open my progress ↗</Link></div><div className="recommendation-grid">{recommendations.map((item) => <div className="recommendation" key={item.title}><span className="rec-icon">{item.icon}</span><span className="rec-label">{item.label}</span><h3>{item.title}</h3><p>{item.body}</p></div>)}</div></section>
@@ -130,13 +130,24 @@ function Home({ profile, savedMajors }: { profile: Profile; savedMajors: string[
   </div>
 }
 
+function Home({ profile }: { profile: Profile; savedMajors: string[] }) {
+  const hasResult = Boolean(profile.lastResult)
+  const composite = profile.composite || Math.round(domains.reduce((total, domain) => total + profile.scores[domain], 0) / domains.length)
+  const ranked = [...domains].sort((a, b) => profile.scores[b] - profile.scores[a])
+  return <div className="page home-page">
+    <PageIntro eyebrow="Your starting point" title={hasResult ? <>Your thinking profile<br /><em>is ready to explore.</em></> : <>Start with one test.<br /><em>Learn how you think.</em></>} body={hasResult ? 'Your result is a private snapshot across seven thinking areas. Read it first, then decide what you want to explore next.' : 'Take the timed IAQ assessment to get a clear, visual snapshot of seven different thinking areas.'} action={<Link to={hasResult ? '/results' : '/assess'} className="button primary">{hasResult ? 'See your results' : 'Take a test'} <span>→</span></Link>} />
+    <div className="notice-bar"><span className="notice-icon">i</span><span><strong>Experimental profile.</strong> IAQ results are educational and provisional. They are not a clinical diagnosis or an officially normed IQ score.</span><Link to="/methodology">Read the method ↗</Link></div>
+    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">Latest result / seven areas</div><h2>{hasResult ? 'Your profile at a glance' : 'Your result will live here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Ready when you are'}</span><strong>{hasResult ? composite : '—'}{hasResult && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within-profile only` : 'Complete the timed test to see your distribution.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? profile.scores[domain] : 0}%` }} /></i><strong>{hasResult ? profile.scores[domain] : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See what is included ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">What happens next</div><div className="home-step-number">01</div><h2>{hasResult ? 'Add context later.' : 'Take the test first.'}</h2><p>{hasResult ? 'Interests, projects, and possible directions become more useful after you understand the cognitive snapshot.' : 'Find a quiet place. Answer 56 medium-to-hard tasks. Your result appears immediately when you finish.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start the test'} <span>→</span></Link></aside><section className="panel home-next-panel span-12"><div><div className="eyebrow">After your result</div><h2>Explore what you want to know next.</h2><p>IAQ can later connect your profile to interests, subjects, and real experiences — without turning one score into a prediction of your future.</p></div><div className="home-next-links"><Link to="/compass"><span>01</span>Explore directions <b>↗</b></Link><Link to="/tracker"><span>02</span>Check your progress <b>↗</b></Link><Link to="/methodology"><span>03</span>Understand the method <b>↗</b></Link></div></section></div>
+  </div>
+}
+
 function EvidenceRow({ label, value, state }: { label: string; value: string; state: string }) { return <div className="evidence-row"><span className={`state-mark ${state}`}>{state === 'good' ? '✓' : '○'}</span><span>{label}</span><strong>{value}</strong></div> }
 
 function AssessLanding() {
-  return <div className="page"><PageIntro eyebrow="Take a test / About 20–25 minutes" title={<>Take a test.<br /><em>Learn about yourself.</em></>} body="Try 56 medium-to-hard thinking and attention tasks. Find a quiet spot, take your time, and use the result as a starting point." action={<Link to="/assess/session" className="button primary">Start my test <span>→</span></Link>} /><div className="notice-bar subtle"><span className="notice-icon">⌁</span><span><strong>Good to know.</strong> This is an experimental educational profile. We do not use your camera or microphone, and you can pause at any time.</span></div><div className="assessment-overview"><section className="assessment-hero"><div className="assessment-index">01 <span>/ 07</span></div><h2>Seven ways to see<br /><em>how you think.</em></h2><p>We look at a few different kinds of thinking so one number never has to tell the whole story.</p><Link to="/methodology" className="text-button light">See how it works ↗</Link></section><div className="domain-list">{domains.map((domain, index) => <div className="domain-row" key={domain}><span className="domain-no">0{index + 1}</span><div><strong>{domain}</strong><span>{domainMeta[domain].description}</span></div><span className={`domain-tag ${domainMeta[domain].tone}`}>{index === 5 ? 'memory game' : index === 6 ? 'quick task' : '8 questions'}</span></div>)}</div></div></div>
+  return <div className="page"><PageIntro eyebrow="Take a test / 35 minutes" title={<>Take a test.<br /><em>See your thinking profile.</em></>} body="Answer 56 medium-to-hard tasks across seven thinking areas. Find a quiet place, keep your focus, and use your result as a starting point — not a label." action={<Link to="/assess/session" className="button primary">Start my test <span>→</span></Link>} /><div className="notice-bar subtle"><span className="notice-icon">⌁</span><span><strong>Before you begin.</strong> You will have 35 minutes. The test is timed and submits automatically when time runs out.</span></div><div className="assessment-overview"><section className="assessment-hero"><div className="assessment-index">01 <span>/ 07</span></div><h2>Seven ways to see<br /><em>how you think.</em></h2><p>We look at different kinds of thinking so one number never has to tell the whole story.</p><Link to="/methodology" className="text-button light">See how it works ↗</Link></section><div className="domain-list">{domains.map((domain, index) => <div className="domain-row" key={domain}><span className="domain-no">0{index + 1}</span><div><strong>{domain}</strong><span>{domainMeta[domain].description}</span></div><span className={`domain-tag ${domainMeta[domain].tone}`}>{index === 5 ? '8 memory tasks' : index === 6 ? '8 speed tasks' : '8 questions'}</span></div>)}</div></div></div>
 }
 
-function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number>) => void }) {
+function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, number>) => void }) {
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string>>({})
@@ -174,7 +185,7 @@ function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number
       setSubmitting(true)
       setApiError('')
       try {
-        const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1)
+        const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1, 10000)
         setAnswers((current) => ({ ...current, [question.id]: selected }))
         if (nextQuestion) setApiQuestion(nextQuestion)
         else {
@@ -215,6 +226,97 @@ function Assessment({ onComplete }: { onComplete: (scores: Record<Domain, number
   return <div className="assessment-screen"><header className="assessment-header"><div className="assessment-brand"><Brand /><span className="assessment-name">IAQ Cognitive Profile</span></div><div className="assessment-progress"><span>Assessment progress</span><div className="progress-track"><span style={{ width: `${Math.max(5, progress)}%` }} /></div><span className="mono-label">{String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><div className="assessment-actions"><button className="text-button" onClick={() => setPaused(true)}>Pause</button><button className="text-button" onClick={() => setApiError('Technical issue noted. If this continues, exit and restart the assessment.')}>Report issue</button><Link className="assessment-exit" to="/">Exit assessment</Link></div></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(displayNumber, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className="timer-label">◷ {Math.max(1, Math.floor((Date.now() - startedAt) / 60000))} min</span></div><AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><button className="button ghost" disabled={usingApi || index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>← Previous</button><span className="autosave">{selected ? (usingApi ? 'Ready to save' : 'Answer saved locally') : 'Select one answer to continue'}</span><button className="button primary" disabled={!selected || submitting} onClick={next}>{submitting ? 'Saving…' : displayNumber === totalQuestions ? 'See profile' : 'Continue'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error">{apiError}</div>}<div className="assessment-footnote">{usingApi ? '56 questions / 8 from each thinking area / randomized for this attempt.' : 'Demo fallback / 14 questions / start the IAQ API for a randomized 56-question form.'}</div></main>{paused && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setPaused(false)} aria-label="Close">×</button><div className="eyebrow">Session saved</div><h2>Your progress is safe.</h2><p>You have answered {answered} of {totalQuestions} questions. Resume when you have a quiet moment.</p><div className="modal-actions"><button className="button ghost" onClick={() => setPaused(false)}>Keep going</button><button className="button primary" onClick={() => { setPaused(false); navigate('/') }}>Exit assessment</button></div><button className="text-button" onClick={restart}>Restart this test</button></div></div>}</div>
 }
 
+function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => void }) {
+  const navigate = useNavigate()
+  const submissionStarted = useRef(false)
+  const [apiSession, setApiSession] = useState<string | null>(null)
+  const [question, setQuestion] = useState<Question | null>(null)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [questionStartedAt, setQuestionStartedAt] = useState(Date.now())
+  const [deadlineAt, setDeadlineAt] = useState<string | null>(null)
+  const [timeLeft, setTimeLeft] = useState(2100)
+  const [totalQuestions, setTotalQuestions] = useState(56)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [apiError, setApiError] = useState('')
+
+  const begin = async () => {
+    setLoading(true)
+    setApiError('')
+    try {
+      const started = await startRandomizedAssessment()
+      setApiSession(started.sessionId)
+      setQuestion(started.question)
+      setDeadlineAt(started.deadlineAt)
+      setTimeLeft(Math.max(0, Math.ceil((new Date(started.deadlineAt).getTime() - Date.now()) / 1000)))
+      setTotalQuestions(started.questionCount)
+      setQuestionStartedAt(Date.now())
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'We could not prepare the test.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const finalize = async () => {
+    if (!apiSession || submissionStarted.current) return
+    submissionStarted.current = true
+    setSubmitting(true)
+    try {
+      const result = await finishAssessment(apiSession)
+      onComplete(result)
+      navigate('/results')
+    } catch (error) {
+      submissionStarted.current = false
+      setApiError(error instanceof Error ? error.message : 'We could not create your result.')
+      setSubmitting(false)
+    }
+  }
+
+  useEffect(() => { void begin() }, [])
+  useEffect(() => {
+    if (!deadlineAt) return
+    const tick = () => setTimeLeft(Math.max(0, Math.ceil((new Date(deadlineAt).getTime() - Date.now()) / 1000)))
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [deadlineAt])
+  useEffect(() => { if (timeLeft === 0 && apiSession) void finalize() }, [timeLeft, apiSession])
+
+  const selected = question ? answers[question.id] : undefined
+  const currentSelection = selected ? 1 : 0
+  const answered = Math.max(0, Object.keys(answers).length - currentSelection)
+  const progress = Math.round(((answered + currentSelection) / totalQuestions) * 100)
+  const choose = (option: string) => { if (!submitting && question) setAnswers((current) => ({ ...current, [question.id]: option })) }
+  const next = async () => {
+    if (!question || !selected || !apiSession || submitting || timeLeft === 0) return
+    setSubmitting(true)
+    setApiError('')
+    try {
+      const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1, Math.max(0, Date.now() - questionStartedAt))
+      setAnswers((current) => ({ ...current, [question.id]: selected }))
+      if (nextQuestion) {
+        setQuestion(nextQuestion)
+        setQuestionStartedAt(Date.now())
+        setSubmitting(false)
+      } else {
+        await finalize()
+      }
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'We could not save this answer. Check your connection and try again.')
+      setSubmitting(false)
+    }
+  }
+
+  if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>We are choosing eight questions from each thinking area.</p></div></main></div>
+  if (!question) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card error-card"><div className="eyebrow">The test is not ready</div><h1>We could not start your test.</h1><p>{apiError || 'Start the IAQ API, then try again.'}</p><button className="button primary" onClick={() => { submissionStarted.current = false; void begin() }}>Try again <span>↻</span></button></div></main></div>
+
+  const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0')
+  const seconds = (timeLeft % 60).toString().padStart(2, '0')
+  const timerClass = timeLeft <= 300 ? 'timer-warning' : timeLeft <= 600 ? 'timer-caution' : ''
+  return <div className="assessment-screen"><header className="assessment-header"><div className="assessment-brand"><Brand /><span className="assessment-name">IAQ Cognitive Profile</span></div><div className="assessment-progress"><span>Progress</span><div className="progress-track"><span style={{ width: `${Math.max(3, progress)}%` }} /></div><span className="mono-label">{String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><div className="assessment-actions"><button className="text-button" onClick={() => setApiError('Your test is timed. If you leave, the countdown continues.')}>Need help?</button><Link className="assessment-exit" to="/">Leave test</Link></div></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className={`timer-label ${timerClass}`} aria-live="polite">Time left {minutes}:{seconds}</span></div>{timeLeft <= 600 && <div className={`timer-notice ${timerClass}`}>{timeLeft <= 300 ? 'Five minutes left. Choose your best answer and keep moving.' : 'Ten minutes left. Keep an eye on the clock.'}</div>}<AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{question.visual && <div className="stimulus" aria-label="Visual stimulus"><div className="stimulus-grid">{question.visual.map((item) => <span key={item}>{item}</span>)}</div><span className="stimulus-note">visual stimulus</span></div>}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)} aria-pressed={selected === option}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><span className="autosave">{selected ? 'Answer ready' : 'Choose one answer to continue'}</span><button className="button primary" disabled={!selected || submitting || timeLeft === 0} onClick={next}>{submitting ? 'Saving…' : answered + 1 >= totalQuestions ? 'See my results' : 'Next question'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error" role="alert">{apiError}</div>}<div className="assessment-footnote">35 minutes total · 8 questions from each thinking area · your answers are saved as you go.</div></main></div>
+}
+
 function Compass({ savedMajors, toggleMajor }: { savedMajors: string[]; toggleMajor: (name: string) => void }) {
   const [filter, setFilter] = useState('All directions')
   const filters = ['All directions', 'Technology', 'Design', 'People & behaviour']
@@ -225,10 +327,29 @@ function Compass({ savedMajors, toggleMajor }: { savedMajors: string[]; toggleMa
 function MajorCard({ major, saved, onSave }: { major: Major; saved: boolean; onSave: () => void }) { return <article className="major-card" style={{ '--accent': major.accent } as React.CSSProperties}><div className="major-card-accent" /><div className="major-head"><div><span className="eyebrow">{major.family}</span><h3>{major.name}</h3></div><button className={`save-button ${saved ? 'saved' : ''}`} onClick={onSave} aria-label={saved ? `Remove ${major.name}` : `Save ${major.name}`}>{saved ? '★' : '☆'}</button></div><p>{major.reason}</p><div className="major-metrics"><Metric label="Fit" value={major.fit} /><Metric label="Ready now" value={major.readiness} /><Metric label="Confidence" value={major.confidence} /></div><div className="major-card-foot"><span className={`feasibility ${major.feasibility.toLowerCase().replaceAll(' ', '-')}`}>{major.feasibility}</span><button className="text-button">Explore ↗</button></div></article> }
 function Metric({ label, value }: { label: string; value: number }) { return <div className="metric"><span>{label}</span><strong>{value}</strong><div className="metric-bar"><i style={{ width: `${value}%` }} /></div></div> }
 
-function Results({ profile, savedMajors, toggleMajor }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
+function LegacyResults({ profile, savedMajors, toggleMajor }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
   const chartData = domains.map((domain) => ({ subject: domainMeta[domain].short, score: profile.scores[domain] }))
   const fitData = majors.map((major) => ({ x: major.fit, y: major.readiness, name: major.name, fill: major.accent }))
   return <div className="page"><PageIntro eyebrow="See your potential / Your report" title={<>See your potential.<br /><em>Keep exploring.</em></>} body="Here is a simple snapshot of how you think, what interests you, and what you could try next." action={<button className="button primary" onClick={() => window.print()}>Print my report <span>↗</span></button>} /><div className="result-disclaimer"><div className="disclaimer-mark">!</div><div><strong>Experimental IAQ Composite / 74</strong><p>This V1.0 result is an experimental educational profile, not a clinical diagnosis or officially normed IQ score. It should support reflection and conversation.</p></div><Link to="/methodology">Why this matters ↗</Link></div><div className="result-grid"><section className="panel cognitive-panel span-7"><div className="panel-top"><div><div className="eyebrow">Your thinking snapshot / 07 areas</div><h2>How you think today</h2></div><span className="confidence-badge">Moderate confidence</span></div><div className="domain-bars">{domains.map((domain) => <div className="result-domain" key={domain}><div className="result-domain-label"><span>{domain}</span><b>{profile.scores[domain]}</b></div><div className="result-bar"><i className={domainMeta[domain].tone} style={{ width: `${profile.scores[domain]}%` }} /><span style={{ left: `${profile.scores[domain]}%` }} /></div><p>{domainMeta[domain].description}</p></div>)}</div><div className="result-caption"><span><i className="legend-dot cobalt" /> your profile today</span><span><i className="legend-line" /> no population percentile shown</span></div></section><section className="panel chart-panel span-5"><div className="eyebrow">A quick look</div><h2>Your strengths, side by side</h2><p className="muted">Spatial and abstract tasks stand out today. Speed is a developing signal — it deserves context, not a fixed label.</p><div className="radar-like"><ResponsiveContainer width="100%" height={230}><AreaChart data={chartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}><CartesianGrid stroke="#e5e1d8" vertical={false} /><XAxis dataKey="subject" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#72746e' }} /><YAxis domain={[0, 100]} tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#9c9b93' }} /><Area type="monotone" dataKey="score" stroke="#315CFF" fill="#315CFF" fillOpacity={.1} strokeWidth={2} /><ReferenceLine y={74} stroke="#1AAE91" strokeDasharray="4 4" /></AreaChart></ResponsiveContainer></div><Link to="/tracker" className="text-button">See my progress ↗</Link></section><section className="panel interest-panel span-5"><div className="eyebrow">What interests you</div><div className="interest-head"><h2>I · A · C</h2><span>top three</span></div><p><strong>You like ideas that make sense.</strong> You may enjoy understanding how things work, making ideas visible, and bringing structure to open-ended problems.</p><div className="interest-bars">{['Investigative', 'Artistic', 'Conventional', 'Realistic', 'Social', 'Enterprising'].map((item, i) => <div key={item}><span>{item}</span><i><b style={{ width: `${[92, 78, 65, 42, 35, 28][i]}%` }} /></i></div>)}</div><span className="muted tiny">Your interests can change as you try real things.</span></section><section className="panel fit-panel span-7"><div className="panel-top"><div><div className="eyebrow">Paths you could explore</div><h2>What might fit you?</h2></div><span className="mono-label">5 ideas / 3 alternatives</span></div><p className="muted">Fit is how well a path matches your profile. Readiness is what you have evidence for today. Neither is a permanent limit.</p><div className="fit-chart"><ResponsiveContainer width="100%" height={250}><ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: -12 }}><CartesianGrid stroke="#e3dfd5" /><XAxis type="number" dataKey="x" domain={[50, 100]} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} label={{ value: 'Fit →', position: 'insideBottom', offset: -10, fontSize: 10 }} /><YAxis type="number" dataKey="y" domain={[45, 100]} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} label={{ value: 'Ready now', angle: -90, position: 'insideLeft', fontSize: 10 }} /><Tooltip cursor={{ strokeDasharray: '3 3' }} content={({ active, payload }) => active && payload?.[0] ? <div className="scatter-tooltip">{payload[0].payload.name}<strong>{payload[0].payload.x} fit · {payload[0].payload.y} ready</strong></div> : null} /><Scatter data={fitData} shape={(props: any) => <circle cx={props.cx} cy={props.cy} r={7} fill={props.payload.fill} stroke="#fff" strokeWidth={2} />} /></ScatterChart></ResponsiveContainer></div><div className="quadrant-legend"><span><i className="dot teal" /> ready to try</span><span><i className="dot coral" /> build evidence</span><span><i className="dot ink" /> prepare first</span></div></section><section className="panel plan-panel span-12"><div className="panel-top"><div><div className="eyebrow">Your next four weeks</div><h2>Try something small next.</h2></div><span className="plan-number">04</span></div><div className="plan-grid">{[{ week: '01', title: 'Compare courses', body: 'Look at two Computer Science degree plans. Notice which subjects make you curious.', status: 'This week' }, { week: '02', title: 'Make a tiny project', body: 'Build a small data story or interactive page. Keep it rough and learn from it.', status: 'Next' }, { week: '03', title: 'Talk to a person', body: 'Ask a CS student or professional what their normal week really looks like.', status: 'Later' }, { week: '04', title: 'Write what you noticed', body: 'What gave you energy? What felt hard in a useful way? Add it to My progress.', status: 'Later' }].map((item) => <div className="plan-item" key={item.week}><span className="week-no">{item.week}</span><div><span className="rec-label">{item.status}</span><h3>{item.title}</h3><p>{item.body}</p></div><span className="plan-check">○</span></div>)}</div></section></div></div>
+}
+
+function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
+  const result = profile.lastResult
+  const scores = result?.domainScores || profile.scores
+  const composite = result?.composite || profile.composite || Math.round(domains.reduce((total, domain) => total + scores[domain], 0) / domains.length)
+  const confidence = result?.confidence || profile.confidence || 'demo snapshot'
+  const ranked = [...domains].sort((a, b) => scores[b] - scores[a])
+  const metricFor = (domain: Domain) => result?.domainMetrics[domain]
+  const formatTime = (milliseconds: number | null | undefined) => milliseconds ? `${(milliseconds / 1000).toFixed(1)}s median` : 'Timing not recorded'
+  const strongest = ranked.slice(0, 2).join(' and ')
+  const lower = ranked[ranked.length - 1]
+  return <div className="page results-page">
+    <PageIntro eyebrow="Your results / Private report" title={<>See your results.<br /><em>Understand your profile.</em></>} body="This is a snapshot of how your answers compared across seven thinking areas today. It is a starting point for reflection, not a fixed label." action={<button className="button primary" onClick={() => window.print()}>Print my report <span>↗</span></button>} />
+    <div className="result-disclaimer"><div className="disclaimer-mark">!</div><div><strong>Experimental IAQ Cognitive Profile / {composite}</strong><p>{result?.disclaimer || 'This demo result is provisional. It is not a clinical diagnosis or an officially normed IQ score.'}</p></div><Link to="/methodology">Read the method ↗</Link></div>
+    <div className="result-grid results-top-grid"><section className="panel cognitive-panel span-8"><div className="result-score-head"><div><div className="eyebrow">Your profile score / 0–100</div><div className="result-score">{composite}<span>/100</span></div></div><div className="result-meta"><span className="confidence-badge">{confidence} confidence</span><span>{result ? new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : profile.lastAssessment}</span><span>{result?.assessmentVersion || 'IAQ-COG-0.3'}</span></div></div><div className="profile-distribution"><div className="distribution-scale"><span>0</span><span>50</span><span>100</span></div>{ranked.map((domain) => { const metric = metricFor(domain); return <div className="distribution-row" key={domain}><div className="distribution-label"><span className={`domain-swatch ${domainMeta[domain].tone}`} /><strong>{domain}</strong><b>{scores[domain]}</b></div><div className="distribution-track"><i className={domainMeta[domain].tone} style={{ width: `${scores[domain]}%` }} /><span className="distribution-average" style={{ left: `${composite}%` }} aria-hidden="true" /></div><div className="distribution-detail"><span>{metric?.correct ?? '—'} of {metric?.answered ?? '—'} correct</span><span>{metric?.relative || 'relative to your profile'}</span></div></div> })}</div><div className="result-caption"><span><i className="legend-dot cobalt" /> your profile today</span><span><i className="legend-line" /> your average</span></div></section><aside className="panel result-context"><div className="eyebrow">Read the shape</div><h2>What stands out</h2><p className="result-lede"><strong>{strongest}</strong> are your strongest relative signals in this attempt.</p><div className="result-observation"><span className="observation-mark teal">+</span><div><strong>Strengths to notice</strong><p>These areas came through more strongly than the rest of your profile.</p></div></div><div className="result-observation"><span className="observation-mark coral">→</span><div><strong>More evidence needed</strong><p>{lower} is your lowest relative signal today. Treat it as a question to explore, not a verdict.</p></div></div><div className="result-context-foot"><span>Distribution is within your profile.</span><strong>No population percentile shown.</strong></div></aside></div>
+    <section className="result-evidence-strip"><div><span className="eyebrow">Questions answered</span><strong>{result ? `${result.answeredCount} / ${result.questionCount}` : 'Demo view'}</strong><span>balanced across seven areas</span></div><div><span className="eyebrow">Time limit</span><strong>{result ? `${Math.ceil(result.durationSeconds / 60)} minutes` : '35 minutes'}</strong><span>the test is time-limited</span></div><div><span className="eyebrow">How to read this</span><strong>Compare the bars</strong><span>not yourself with other people</span></div></section>
+    <div className="result-grid result-secondary-grid"><section className="panel secondary-result-panel span-7"><div className="eyebrow">Next, when you are ready</div><h2>Explore what fits you.</h2><p>After your thinking profile, interests and real experiences can add useful context to possible directions. They do not change this result.</p><div className="secondary-actions"><Link className="button secondary" to="/compass">Explore directions <span>→</span></Link><Link className="text-button" to="/tracker">Check your progress ↗</Link></div></section><section className="panel timing-panel span-5"><div className="eyebrow">How timing affected this snapshot</div><h2>{result?.quality?.status === 'acceptable' ? 'Your session looked steady.' : 'Keep timing in context.'}</h2><p>{result?.quality?.warnings?.length ? `The session recorded ${result.quality.warnings.length} quality note${result.quality.warnings.length > 1 ? 's' : ''}. That does not silently change your score, but it is useful context for reading the bars.` : 'No timing warning was recorded. Faster is not automatically better; accuracy and concentration both matter.'}</p><div className="timing-note"><span className="notice-icon">i</span><span>{result ? `Median response times are shown per domain. ${formatTime(metricFor(ranked[0])?.medianResponseTimeMs)}` : 'Complete the timed assessment to see response-time context here.'}</span></div></section></div>
+  </div>
 }
 
 function Tracker({ savedMajors }: { savedMajors: string[] }) {
