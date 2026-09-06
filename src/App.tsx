@@ -3,12 +3,14 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
-import { finishAssessment, saveAndGetNext, startRandomizedAssessment } from './api'
+import { finishAssessment, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment } from './api'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const initialProfile: Profile = {
   name: 'Ari Pratama', completed: true, consented: true, role: 'student', lastAssessment: '12 Aug 2026', nextAssessment: '12 May 2027', strengths: ['Visual-spatial reasoning', 'Abstract reasoning'], scores: initialScores
 }
+
+const ASSESSMENT_SESSION_KEY = 'iaq-active-assessment-session'
 
 function App() {
   const [profile, setProfile] = useState<Profile>(() => {
@@ -233,6 +235,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
   const [question, setQuestion] = useState<Question | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [questionStartedAt, setQuestionStartedAt] = useState(Date.now())
+  const [answeredBaseline, setAnsweredBaseline] = useState(0)
   const [deadlineAt, setDeadlineAt] = useState<string | null>(null)
   const [timeLeft, setTimeLeft] = useState(2100)
   const [totalQuestions, setTotalQuestions] = useState(56)
@@ -244,12 +247,15 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     setLoading(true)
     setApiError('')
     try {
-      const started = await startRandomizedAssessment()
+      const savedSessionId = window.sessionStorage.getItem(ASSESSMENT_SESSION_KEY)
+      const started = savedSessionId ? await resumeRandomizedAssessment(savedSessionId) : await startRandomizedAssessment()
+      window.sessionStorage.setItem(ASSESSMENT_SESSION_KEY, started.sessionId)
       setApiSession(started.sessionId)
       setQuestion(started.question)
       setDeadlineAt(started.deadlineAt)
       setTimeLeft(Math.max(0, Math.ceil((new Date(started.deadlineAt).getTime() - Date.now()) / 1000)))
       setTotalQuestions(started.questionCount)
+      setAnsweredBaseline(started.answeredCount)
       setQuestionStartedAt(Date.now())
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'We could not prepare the test.')
@@ -264,6 +270,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     setSubmitting(true)
     try {
       const result = await finishAssessment(apiSession)
+      window.sessionStorage.removeItem(ASSESSMENT_SESSION_KEY)
       onComplete(result)
       navigate('/results')
     } catch (error) {
@@ -285,7 +292,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
 
   const selected = question ? answers[question.id] : undefined
   const currentSelection = selected ? 1 : 0
-  const answered = Math.max(0, Object.keys(answers).length - currentSelection)
+  const answered = Math.max(0, answeredBaseline + Object.keys(answers).length - currentSelection)
   const progress = Math.round(((answered + currentSelection) / totalQuestions) * 100)
   const choose = (option: string) => { if (!submitting && question) setAnswers((current) => ({ ...current, [question.id]: option })) }
   const next = async () => {

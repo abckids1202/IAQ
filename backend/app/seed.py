@@ -85,6 +85,6 @@ def seed_database(database_url: str) -> int:
 if __name__ == "__main__":
     database_url = os.getenv("IAQ_DATABASE_URL")
     if database_url:
-        print(f"loaded {seed_database(database_url)} reviewed baseline items into PostgreSQL")
+        print(f"loaded {seed_database(database_url)} pilot-ready items into PostgreSQL")
     else:
         seed()

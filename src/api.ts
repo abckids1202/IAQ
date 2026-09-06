@@ -13,6 +13,7 @@ const domainLabels: Record<string, Domain> = {
 
 type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options: string[]; helper?: string; visual?: string[] }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number }
+type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string }
 type ApiResult = {
   id: string
   session_id: string
@@ -84,10 +85,18 @@ function normalizeResult(result: ApiResult): AssessmentResult {
   }
 }
 
-export async function startRandomizedAssessment(): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number }> {
+export async function startRandomizedAssessment(): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number }> {
   const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.3', mode: 'complete' }) })
   const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
-  return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count }
+  return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0 }
+}
+
+export async function resumeRandomizedAssessment(sessionId: string): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number }> {
+  const session = await request<SessionSummary>(`/sessions/${sessionId}`)
+  await request<{ status: string }>(`/sessions/${sessionId}/start`, { method: 'POST' })
+  const next = await request<ApiQuestion & { complete?: boolean; expired?: boolean }>(`/sessions/${sessionId}/next-item`)
+  if (next.expired || next.complete) throw new Error('This assessment session has ended.')
+  return { sessionId, question: normalize(next), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: session.answered_count }
 }
 
 export async function saveAndGetNext(sessionId: string, question: Question, answer: string, order: number, responseTimeMs: number): Promise<Question | null> {
