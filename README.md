@@ -16,6 +16,7 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 - Provider-neutral identity and commerce workflow: development sign-in for each role, server-side permission maps, backend-driven IDR products, order snapshots, mock hosted-checkout state, verified sandbox settlement, and explicit entitlements.
 - Optional account, pricing, checkout, payment-status, billing, and settings routes. Production Supabase/Google/Midtrans activation remains disabled until credentials, merchant approval, MFA, consent, and legal review are complete.
 - Results integrity workflow: an empty results state (no demo score), incomplete domains remain “not assessed,” optional interest check-in persistence, private completion certificates with a minimal public verification response, and development-only report-delivery status.
+- Optional OpenAI-assisted interpretation: a server-only adapter can explain an already-scored report and add cautious direction context. It never scores answers, activates items, changes deterministic matches, or produces an official IQ claim.
 - Product, assessment, privacy, pilot, deployment, and data dictionary documentation in `docs/`.
 
 ## Run the frontend
@@ -62,6 +63,18 @@ bank summary used by the dependency-light local API.
 
 The frontend requires the backend for assessment sessions and real result data.
 Configure `VITE_API_BASE_URL` when connecting the UI to a different service.
+
+### Optional OpenAI layer
+
+Put the key in the root `.env` file at `C:\Users\charl\OneDrive\Desktop\IAQ\.env`, not in a `VITE_*` variable and never in frontend code:
+
+```env
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=gpt-5-mini
+IAQ_AI_ENABLED=true
+```
+
+Restart the backend after changing `.env`. Check `GET /ai/status` or open Results/Explore directions in the app. Without a key, deterministic scoring and direction matching still work; the optional AI buttons report that the provider is not configured. The key is loaded server-side and the adapter sends aggregate scores/interests, not answer keys or report-email fields. See [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md).
 
 ## Verify
 

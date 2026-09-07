@@ -14,17 +14,22 @@ import re
 import hashlib
 import json
 import hmac
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
 from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready
 from .persistence import PostgresAssessmentStore
-from . import access
+from . import access, ai
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
 
 app = FastAPI(title="IAQ API", version="0.1.0", description="Experimental educational profile API")
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):517[0-9]$", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -51,6 +56,7 @@ EVENTS: List[Dict[str, Any]] = []
 SAVED_MAJORS: Dict[str, List[str]] = {}
 REPORT_DELIVERIES: Dict[str, Dict[str, Any]] = {}
 FEEDBACK: List[Dict[str, Any]] = []
+AI_INSIGHTS: Dict[str, Dict[str, Any]] = {}
 DATABASE_URL = os.getenv("IAQ_DATABASE_URL")
 PERSISTENCE = PostgresAssessmentStore(DATABASE_URL) if DATABASE_URL else None
 
@@ -118,6 +124,10 @@ class InterestResponseCreate(BaseModel):
 
 class CertificateCreate(BaseModel):
     result_id: str = Field(min_length=8, max_length=80)
+
+
+class AIDirectionsCreate(BaseModel):
+    result_id: Optional[str] = Field(default=None, min_length=8, max_length=80)
 
 
 class FeedbackCreate(BaseModel):
@@ -712,6 +722,68 @@ def recommendations(request: Request) -> Dict[str, Any]:
     cognitive = ({domain: value if isinstance(value, int) else 50 for domain, value in latest["domain_scores"].items()} if latest else {domain: 50 for domain in DOMAINS})
     interests = access.INTEREST_ATTEMPTS.get(user["id"], {}).get("scores", {"I": 50, "A": 50, "C": 50, "R": 50, "S": 50, "E": 50})
     return {"version": "MATCH-V2", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, latest["answered_count"] if latest else 0, major["vector"]), "confidence": recommendation_confidence(latest["answered_count"] if latest else 0, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit using the latest persisted cognitive result and optional stated interests; not destiny", "warnings": ["experimental_profile", "no_population_norms", "try_real_experiences_before_deciding"]}}
+
+
+@app.get("/ai/status")
+def ai_status() -> Dict[str, Any]:
+    """Expose safe capability status without ever exposing the API key."""
+    return ai.public_status()
+
+
+def _latest_result_for_user(user_id: str) -> Optional[Dict[str, Any]]:
+    owned = []
+    for result in RESULTS.values():
+        session = session_for(result["session_id"])
+        if session and session.get("user_id") == user_id:
+            owned.append(result)
+    return max(owned, key=lambda result: result.get("completed_at", ""), default=None)
+
+
+@app.post("/ai/results/{result_id}/interpretation")
+def ai_result_interpretation(result_id: str, request: Request) -> Dict[str, Any]:
+    """Create a bounded plain-language explanation for an existing result.
+
+    The score is already calculated by IAQ's deterministic scorer. OpenAI only
+    receives aggregate result evidence and cannot write back score fields.
+    """
+    result = get_result(result_id, request)
+    user_id = current_user(request)["id"]
+    cache_key = f"{user_id}:{result_id}:interpretation"
+    if cache_key in AI_INSIGHTS:
+        return AI_INSIGHTS[cache_key]
+    labels = {domain: domain.replace("_", " ").title() for domain in DOMAINS}
+    try:
+        narrative, metadata = ai.interpret_result(result, labels)
+    except ai.AIUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+    except ai.AIOutputError as error:
+        raise HTTPException(502, str(error)) from error
+    response = {"id": str(uuid4()), "result_id": result_id, "kind": "result_interpretation", "status": "generated", "data_origin": "AI_ASSISTED", "created_at": NOW(), **metadata, "narrative": narrative}
+    AI_INSIGHTS[cache_key] = response
+    return response
+
+
+@app.post("/ai/directions")
+def ai_directions(payload: AIDirectionsCreate, request: Request) -> Dict[str, Any]:
+    """Add cautious AI explanations to deterministic direction candidates."""
+    user = current_user(request)
+    result = get_result(payload.result_id, request) if payload.result_id else _latest_result_for_user(user["id"])
+    if not result:
+        raise HTTPException(404, "Complete an assessment before requesting direction context")
+    interest = access.INTEREST_ATTEMPTS.get(user["id"], {"status": "not_started", "scores": {}, "code": None})
+    cache_key = f"{user['id']}:{result['id']}:directions:{interest.get('id', 'none')}"
+    if cache_key in AI_INSIGHTS:
+        return AI_INSIGHTS[cache_key]
+    candidates = [{key: value for key, value in major.items() if key != "vector"} | major_fit({domain: value if isinstance(value, int) else 50 for domain, value in result.get("domain_scores", {}).items()}, interest.get("scores", {}), result.get("answered_count", 0), major["vector"]) for major in MAJORS]
+    try:
+        narrative, metadata = ai.suggest_directions(result, interest, candidates)
+    except ai.AIUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+    except ai.AIOutputError as error:
+        raise HTTPException(502, str(error)) from error
+    response = {"id": str(uuid4()), "result_id": result["id"], "interest_attempt_id": interest.get("id"), "kind": "direction_context", "status": "generated", "data_origin": "AI_ASSISTED", "created_at": NOW(), **metadata, **narrative}
+    AI_INSIGHTS[cache_key] = response
+    return response
 
 
 @app.post("/results/{result_id}/delivery")

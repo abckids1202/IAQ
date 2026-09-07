@@ -148,6 +148,32 @@ export async function submitInterestResponses(responses: Record<string, number>)
   return request('/questionnaires/compass-v1/responses', { method: 'POST', body: JSON.stringify({ responses }) })
 }
 
+export type AIInterpretation = {
+  id: string
+  result_id: string
+  kind: string
+  status: string
+  data_origin: string
+  provider: string
+  model: string
+  prompt_version: string
+  narrative: { what_stands_out: string[]; where_more_evidence: string[]; timing_context: string; next_step: string }
+}
+
+export async function getAIStatus(): Promise<{ enabled: boolean; configured: boolean; model: string | null; prompt_version: string; capabilities: string[] }> {
+  return request('/ai/status')
+}
+
+export async function requestAIInterpretation(resultId: string): Promise<AIInterpretation> {
+  return request(`/ai/results/${resultId}/interpretation`, { method: 'POST' })
+}
+
+export type AIDirectionContext = { slug: string; name: string; why_this_may_fit: string; try_next: string; caution: string }
+
+export async function requestAIDirections(resultId: string): Promise<{ id: string; result_id: string; data_origin: string; provider: string; model: string; directions: AIDirectionContext[] }> {
+  return request('/ai/directions', { method: 'POST', body: JSON.stringify({ result_id: resultId }) })
+}
+
 export type Certificate = { id: string; certificate_identifier: string; title: string; assessment_version: string; score_version: string; status: string; issued_at: string; verification_url: string }
 
 export async function issueCertificate(resultId: string): Promise<Certificate> {
