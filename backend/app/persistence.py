@@ -9,11 +9,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 import psycopg
-
-
-DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class PostgresAssessmentStore:
@@ -24,14 +22,6 @@ class PostgresAssessmentStore:
         return psycopg.connect(self.dsn)
 
     def _ensure_reference_data(self, cursor, assessment_version: str) -> str:
-        cursor.execute(
-            """
-            INSERT INTO users (id, email, role)
-            VALUES (%s, 'demo-student@iaq.local', 'student')
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (DEMO_USER_ID,),
-        )
         cursor.execute(
             """
             INSERT INTO assessment_definitions (slug, name)
@@ -52,28 +42,69 @@ class PostgresAssessmentStore:
         )
         return str(cursor.fetchone()[0])
 
+    def _db_user_id(self, external_user_id: str) -> str:
+        """Map local/demo identities to stable UUIDs without a shared user."""
+        try:
+            return str(UUID(external_user_id))
+        except (ValueError, AttributeError):
+            return str(uuid5(NAMESPACE_URL, f"https://iaq.local/user/{external_user_id}"))
+
     def create_session(self, session: Dict[str, Any]) -> None:
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 assessment_version_id = self._ensure_reference_data(cursor, session["assessment_version"])
+                external_user_id = str(session.get("user_id", "demo-student"))
+                database_user_id = self._db_user_id(external_user_id)
                 cursor.execute(
                     """
-                    INSERT INTO test_sessions (id, user_id, assessment_version_id, status, data_origin, started_at, deadline_at, duration_seconds)
-                    VALUES (%s, %s, %s, %s, 'REAL_PILOT', NULL, %s, %s)
+                    INSERT INTO users (id, email, role)
+                    VALUES (%s, %s, 'student')
+                    ON CONFLICT (id) DO NOTHING
                     """,
-                    (session["id"], DEMO_USER_ID, assessment_version_id, session["status"], session["deadline_at"], session["duration_seconds"]),
+                    (database_user_id, f"{external_user_id}@local.iaq"),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO test_sessions (id, user_id, external_user_id, assessment_version_id, status, data_origin, started_at, deadline_at, duration_seconds, consent_snapshot)
+                    VALUES (%s, %s, %s, %s, %s, 'REAL_PILOT', NULL, %s, %s, %s::jsonb)
+                    """,
+                    (session["id"], database_user_id, external_user_id, assessment_version_id, session["status"], session["deadline_at"], session["duration_seconds"], json.dumps(session.get("consent_snapshot", {}))),
                 )
                 for position, item_id in enumerate(session["item_order"]):
                     cursor.execute(
                         """
                         INSERT INTO assessment_form_items (session_id, item_version_id, domain, presented_order)
                         SELECT %s, iv.id, i.domain, %s
-                        FROM items i JOIN item_versions iv ON iv.item_id = i.id AND iv.version = 1
+                        FROM items i JOIN LATERAL (
+                            SELECT id FROM item_versions WHERE item_id = i.id ORDER BY version DESC LIMIT 1
+                        ) iv ON TRUE
                         WHERE i.item_id = %s
                         ON CONFLICT (session_id, presented_order) DO NOTHING
                         """,
                         (session["id"], position, item_id),
                     )
+
+    def store_identity(self, external_user_id: str, email: str, display_name: str, age_band: str, consent_version: str, granted: bool) -> None:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                database_user_id = self._db_user_id(external_user_id)
+                cursor.execute(
+                    """
+                    INSERT INTO users (id, email, role)
+                    VALUES (%s, %s, 'student')
+                    ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
+                    """,
+                    (database_user_id, email),
+                )
+                cursor.execute("SELECT 1 FROM profiles WHERE user_id = %s LIMIT 1", (database_user_id,))
+                if cursor.fetchone():
+                    cursor.execute("UPDATE profiles SET display_name = %s, age_band = %s, updated_at = now() WHERE user_id = %s", (display_name, age_band, database_user_id))
+                else:
+                    cursor.execute("INSERT INTO profiles (user_id, display_name, age_band) VALUES (%s, %s, %s)", (database_user_id, display_name, age_band))
+                cursor.execute(
+                    "INSERT INTO user_consents (user_id, consent_version, purpose, granted) VALUES (%s, %s, 'pilot_data_and_private_report', %s)",
+                    (database_user_id, consent_version, granted),
+                )
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self._connection() as connection:
@@ -81,7 +112,7 @@ class PostgresAssessmentStore:
                 cursor.execute(
                     """
                     SELECT ts.id, ad.slug, av.version, ts.status, ts.created_at, ts.started_at,
-                           ts.deadline_at, ts.duration_seconds, ts.result_id
+                           ts.deadline_at, ts.duration_seconds, ts.result_id, COALESCE(ts.external_user_id, ts.user_id::text)
                     FROM test_sessions ts
                     JOIN assessment_versions av ON av.id = ts.assessment_version_id
                     JOIN assessment_definitions ad ON ad.id = av.definition_id
@@ -122,7 +153,7 @@ class PostgresAssessmentStore:
                     "started_at": row[5].isoformat() if row[5] else None,
                     "deadline_at": row[6].isoformat() if row[6] else None,
                     "duration_seconds": row[7], "result_id": str(row[8]) if row[8] else None,
-                    "responses": responses, "item_order": item_order, "user_id": "demo-student",
+                    "responses": responses, "item_order": item_order, "user_id": row[9],
                 }
 
     def update_session(self, session_id: str, values: Dict[str, Any]) -> None:
@@ -143,7 +174,9 @@ class PostgresAssessmentStore:
                     """
                     INSERT INTO responses (session_id, item_version_id, presented_order, response, is_correct, response_time_ms, idempotency_key)
                     SELECT %s, iv.id, %s, %s::jsonb, (%s = iv.answer_key), %s, %s
-                    FROM items i JOIN item_versions iv ON iv.item_id = i.id AND iv.version = 1
+                    FROM items i JOIN LATERAL (
+                        SELECT id, answer_key FROM item_versions WHERE item_id = i.id ORDER BY version DESC LIMIT 1
+                    ) iv ON TRUE
                     WHERE i.item_id = %s
                     ON CONFLICT (idempotency_key) DO NOTHING
                     """,
@@ -179,7 +212,14 @@ class PostgresAssessmentStore:
     def get_result(self, result_id: str) -> Optional[Dict[str, Any]]:
         with self._connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at FROM assessment_results WHERE id = %s", (result_id,))
+                cursor.execute("""
+                    SELECT ar.id, ar.session_id, ar.composite, ar.confidence, ar.disclaimer,
+                           ar.question_count, ar.answered_count, ar.domain_metrics, ar.quality,
+                           ar.completed_at, COALESCE(ts.external_user_id, ts.user_id::text), ar.access_tier
+                    FROM assessment_results ar
+                    JOIN test_sessions ts ON ts.id = ar.session_id
+                    WHERE ar.id = %s
+                """, (result_id,))
                 row = cursor.fetchone()
                 if not row:
                     return None
@@ -190,10 +230,10 @@ class PostgresAssessmentStore:
                 metrics = row[7] if isinstance(row[7], dict) else json.loads(row[7])
                 quality = row[8] if isinstance(row[8], dict) else json.loads(row[8])
                 return {
-                    "id": str(row[0]), "session_id": str(row[1]), "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "SCORING-V1",
+                    "id": str(row[0]), "session_id": str(row[1]), "user_id": row[10], "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "SCORING-V1",
                     "composite": int(row[2]) if row[2] is not None else None, "domain_scores": {domain: int(score) if score is not None else None for _, domain, score in domain_rows}, "domain_metrics": metrics,
                     "confidence": row[3], "quality": quality, "answered_count": row[6], "question_count": row[5], "duration_seconds": 2100,
-                    "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4],
+                    "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4], "access_tier": row[11] or "summary",
                 }
 
     def store_report_delivery(self, delivery: Dict[str, Any]) -> None:
@@ -219,6 +259,50 @@ class PostgresAssessmentStore:
                 if not row:
                     return None
                 return {"id": str(row[0]), "result_id": str(row[1]), "name": row[2], "email": row[3], "consent_version": row[4], "status": row[5], "provider": row[6], "requested_at": row[7].isoformat() if row[7] else None, "sent_at": row[8].isoformat() if row[8] else None}
+
+    def get_ai_output(self, result_id: str, kind: str, input_hash: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, result_id, kind, status, data_origin, provider, model,
+                           prompt_version, input_hash, output, fallback_used,
+                           provider_request_id, error, created_at
+                    FROM ai_result_outputs
+                    WHERE result_id = %s AND kind = %s AND input_hash = %s
+                    """,
+                    (result_id, kind, input_hash),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                output = row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {}
+                return {
+                    "id": str(row[0]), "result_id": str(row[1]), "kind": row[2],
+                    "status": row[3], "data_origin": row[4], "provider": row[5],
+                    "model": row[6], "prompt_version": row[7], "input_hash": row[8],
+                    **output, "fallback_used": row[10], "provider_request_id": row[11],
+                    "error": row[12], "created_at": row[13].isoformat() if row[13] else None,
+                }
+
+    def store_ai_output(self, output: Dict[str, Any]) -> None:
+        nested = {key: value for key, value in output.items() if key not in {"id", "result_id", "user_id", "kind", "status", "data_origin", "provider", "model", "prompt_version", "input_hash", "fallback_used", "provider_request_id", "error", "created_at"}}
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO ai_result_outputs
+                      (id, result_id, user_id, kind, status, data_origin, provider, model,
+                       prompt_version, input_hash, output, fallback_used, provider_request_id,
+                       error, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                    ON CONFLICT (result_id, kind, input_hash) DO UPDATE SET
+                      status = EXCLUDED.status, output = EXCLUDED.output,
+                      fallback_used = EXCLUDED.fallback_used, error = EXCLUDED.error,
+                      updated_at = EXCLUDED.updated_at
+                    """,
+                    (output["id"], output["result_id"], self._db_user_id(str(output.get("user_id", "demo-student"))), output["kind"], output["status"], output["data_origin"], output["provider"], output["model"], output["prompt_version"], output["input_hash"], json.dumps(nested), bool(output.get("fallback_used", False)), output.get("provider_request_id"), output.get("error"), output.get("created_at"), output.get("created_at")),
+                )
 
     def store_feedback(self, feedback: Dict[str, Any]) -> None:
         with self._connection() as connection:

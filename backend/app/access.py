@@ -8,6 +8,7 @@ without changing the API contracts.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 import secrets
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -123,6 +124,7 @@ SEAT_ALLOCATIONS: Dict[str, Dict[str, Any]] = {
 }
 INTEREST_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
 CERTIFICATES: Dict[str, Dict[str, Any]] = {}
+GUARDIAN_CONSENTS: Dict[str, Dict[str, Any]] = {}
 
 
 def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -164,6 +166,7 @@ def get_or_create_student(email: str) -> Dict[str, Any]:
     user_id = f"student-{uuid4().hex[:12]}"
     user = {"id": user_id, "email": email.lower(), "display_name": email.split("@")[0].replace(".", " ").title(), "roles": ["student"], "account_status": "onboarding_incomplete", "age_band": "unknown", "school_id": None, "mfa_verified": True}
     USERS[user_id] = user
+    add_entitlement(user_id, "assessment.free.start", "account_creation", f"free:{user_id}", quantity=1, granted_by="system")
     return user
 
 
@@ -172,7 +175,18 @@ def record_audit(actor_id: str, action: str, resource_type: str, resource_id: Op
 
 
 def list_products() -> List[Dict[str, Any]]:
-    return [{key: value for key, value in product.items() if key not in {"entitlement_code", "report_code"}} for product in PRODUCTS.values() if product["active"]]
+    products: List[Dict[str, Any]] = []
+    for product in PRODUCTS.values():
+        if not product["active"]:
+            continue
+        public = {key: value for key, value in product.items() if key not in {"entitlement_code", "report_code"}}
+        if product["id"] == "iaq-complete":
+            try:
+                public["amount_minor"] = max(0, int(os.getenv("IAQ_FULL_REPORT_PRICE_IDR", str(public["amount_minor"]))))
+            except ValueError:
+                pass
+        products.append(public)
+    return products
 
 
 def add_entitlement(owner_id: str, code: str, source_type: str, source_id: str, quantity: int = 1, granted_by: Optional[str] = None) -> Dict[str, Any]:
@@ -255,6 +269,12 @@ def create_order(purchaser_id: str, product_id: str, beneficiary_id: Optional[st
         relationship = GUARDIAN_RELATIONSHIPS.get(f"{purchaser_id}:{beneficiary_id}")
         if not relationship or relationship["status"] != "verified":
             raise PermissionError("A verified guardian relationship is required for this beneficiary")
+    product = dict(product)
+    if product_id == "iaq-complete":
+        try:
+            product["amount_minor"] = max(0, int(os.getenv("IAQ_FULL_REPORT_PRICE_IDR", str(product["amount_minor"]))))
+        except ValueError:
+            pass
     order_id = str(uuid4())
     order = {
         "id": order_id, "order_number": f"IAQ-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{order_id[:8].upper()}",

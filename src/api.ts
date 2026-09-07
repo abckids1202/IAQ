@@ -11,7 +11,7 @@ const domainLabels: Record<string, Domain> = {
   processing_speed: 'Processing speed'
 }
 
-type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options: string[]; helper?: string; visual?: string[] }
+type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options: string[]; helper?: string; visual?: string[]; render_type?: string; render_parameters?: Record<string, unknown> }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number }
 type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string }
 type ApiResult = {
@@ -29,6 +29,8 @@ type ApiResult = {
   duration_seconds: number
   completed_at: string
   disclaimer: string
+  full_access?: boolean
+  paywall?: { title: string; body: string; product_id: string }
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -48,7 +50,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function normalize(item: ApiQuestion): Question {
-  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options, helper: item.helper, visual: item.visual }
+  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options, helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters }
 }
 
 function normalizeResult(result: ApiResult): AssessmentResult {
@@ -82,7 +84,9 @@ function normalizeResult(result: ApiResult): AssessmentResult {
     questionCount: result.question_count,
     durationSeconds: result.duration_seconds,
     completedAt: result.completed_at,
-    disclaimer: result.disclaimer
+    disclaimer: result.disclaimer,
+    fullAccess: result.full_access,
+    paywall: result.paywall
   }
 }
 
@@ -125,7 +129,7 @@ export type ReportDelivery = {
   requested_at: string
 }
 
-export async function requestReportDelivery(resultId: string, payload: { name: string; email: string; granted: boolean; age?: number }): Promise<ReportDelivery> {
+export async function requestReportDelivery(resultId: string, payload: { name: string; email: string; granted: boolean; age?: number; guardian_consent_id?: string }): Promise<ReportDelivery> {
   return request<ReportDelivery>(`/results/${resultId}/delivery`, { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'REPORT-DELIVERY-1.0' }) })
 }
 
@@ -144,8 +148,8 @@ export async function getInterestResult(): Promise<InterestResult> {
   return request('/me/interests')
 }
 
-export async function submitInterestResponses(responses: Record<string, number>): Promise<InterestResult> {
-  return request('/questionnaires/compass-v1/responses', { method: 'POST', body: JSON.stringify({ responses }) })
+export async function submitInterestResponses(responses: Record<string, number>, resultId?: string): Promise<InterestResult> {
+  return request('/questionnaires/compass-v1/responses', { method: 'POST', body: JSON.stringify({ responses, result_id: resultId }) })
 }
 
 export type AIInterpretation = {
@@ -250,6 +254,10 @@ export async function logout(): Promise<void> {
 
 export async function getCurrentUser(): Promise<AccessUser> {
   return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
+}
+
+export async function captureIdentity(payload: { email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string } }> {
+  return request('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
 }
 
 export async function listProducts(): Promise<Product[]> {

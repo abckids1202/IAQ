@@ -33,7 +33,7 @@ The root `.env` is ignored by Git. Never place the key in `VITE_OPENAI_API_KEY`,
 - Receive report-recipient names/emails or raw response-level secrets.
 - Persist an AI narrative until real user-ID propagation and retention controls are complete.
 
-The backend marks returned outputs `data_origin=AI_ASSISTED`, pins a prompt version, validates JSON, whitelists candidate direction slugs, and uses `store=False` on Responses API calls. Until the PostgreSQL identity layer stops hardcoding its demo user, AI outputs remain in-memory/request-scoped by design.
+The backend marks returned outputs `data_origin=AI_ASSISTED`, pins a prompt version, validates JSON, whitelists candidate direction slugs, uses `store=False` on Responses API calls, and caches results by a deterministic input hash. When Postgres is configured, the same versioned output is stored in `ai_result_outputs`; local development keeps the cache process-local.
 
 ## Endpoints
 

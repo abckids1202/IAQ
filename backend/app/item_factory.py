@@ -29,7 +29,13 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         "explanation": explanation,
         "difficulty_label": "medium_hard",
         "difficulty_estimate": None,
-        "lifecycle_status": "PILOT",
+        # Generated candidates are never student-eligible until two human
+        # reviewers approve the exact item version.  Keeping this state
+        # explicit prevents the seed job from accidentally turning generated
+        # content into production assessment material.
+        "lifecycle_status": "AUTO_VERIFIED",
+        # `status` remains the legacy demo-form flag used by the local preview;
+        # `lifecycle_status` is authoritative for release and seed gating.
         "status": "PILOT",
         "data_origin": "ORIGINAL_GENERATED",
         "content_version": 2,
@@ -37,6 +43,10 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         "generation_parameters": {"factory": family.split("_")[0], "seed": FACTORY_SEED, "variant": item_id[-3:]},
         "provenance": "Original IAQ deterministic candidate; human review required before activation.",
         "language": "en",
+        "render_type": "svg_stimulus" if domain in {"abstract_reasoning", "visual_spatial_reasoning"} else kind,
+        "render_parameters": {"seed": f"{FACTORY_SEED}:{item_id}", "family": family, "variant": item_id[-3:]},
+        "review_required": True,
+        "review_history": [],
     }
 
 

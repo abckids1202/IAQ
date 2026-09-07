@@ -17,6 +17,8 @@ export type Question = {
   helper?: string
   options: string[]
   visual?: string[]
+  renderType?: string
+  renderParameters?: Record<string, unknown>
 }
 
 export type Major = {
@@ -74,4 +76,10 @@ export type AssessmentResult = {
   durationSeconds: number
   completedAt: string
   disclaimer: string
+  fullAccess?: boolean
+  paywall?: {
+    title: string
+    body: string
+    product_id: string
+  }
 }

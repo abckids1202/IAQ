@@ -33,6 +33,10 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         "generation_parameters": None,
         "provenance": "Original IAQ reviewed pilot item; not copied from a commercial test.",
         "language": "en",
+        "render_type": "svg_stimulus" if domain in {"abstract_reasoning", "visual_spatial_reasoning"} else kind,
+        "render_parameters": {"seed": f"iaq-authored:{item_id}", "family": family},
+        "review_required": False,
+        "review_history": [{"status": "PILOT", "reviewer": "IAQ authoring baseline"}],
     }
 
 
@@ -200,6 +204,7 @@ SPEED: List[Dict[str, Any]] = [
 
 MINIMUM_ITEMS_PER_DOMAIN = 20
 TARGET_ITEMS_PER_DOMAIN = 120
+REVIEWED_ITEMS_PER_DOMAIN = 100
 
 QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED + generated_items()
 
@@ -213,4 +218,17 @@ def bank_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, in
 
 def bank_is_ready(items: Iterable[Dict[str, Any]] = QUESTION_BANK, minimum_per_domain: int = 20) -> bool:
     counts = bank_counts(items)
+    return len(counts) == 7 and all(value >= minimum_per_domain for value in counts.values())
+
+
+def reviewed_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in items:
+        if item.get("lifecycle_status", item.get("status")) in {"HUMAN_REVIEWED", "PILOT", "ACTIVE"}:
+            counts[item["domain"]] = counts.get(item["domain"], 0) + 1
+    return counts
+
+
+def review_gate_ready(items: Iterable[Dict[str, Any]] = QUESTION_BANK, minimum_per_domain: int = REVIEWED_ITEMS_PER_DOMAIN) -> bool:
+    counts = reviewed_counts(items)
     return len(counts) == 7 and all(value >= minimum_per_domain for value in counts.values())

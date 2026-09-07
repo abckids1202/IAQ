@@ -4,7 +4,7 @@
 
 IAQ is a strong local pilot baseline, not a production assessment service yet. The main product loop is present: a student can start a timed randomized assessment, submit real responses, receive a results-first visual report, complete a separate interest check-in, explore deterministic directions, request development-mode report delivery, and issue a private completion certificate.
 
-The highest-risk gap is not the UI. It is identity-aware persistence and validation: the PostgreSQL adapter still uses a demo user ID for local persistence, there is no real provider auth in this checkout, and no real pilot data exists to support difficulty, fairness, reliability, or norm claims.
+The highest-risk gap is not the UI. It is production identity/provider activation and validation: stable external identities now map to database users, but there is no real provider auth in this checkout, and no real pilot data exists to support difficulty, fairness, reliability, or norm claims.
 
 ## Progress by product area
 
@@ -22,9 +22,9 @@ The highest-risk gap is not the UI. It is identity-aware persistence and validat
 | Commerce | Sandbox baseline | Product catalog, backend price snapshots, orders, entitlements, mock settlement, Midtrans signature boundary | No live merchant credentials/webhook rehearsal/refund reconciliation in this environment |
 | Report email | Development queue | Consent and minor age gate, idempotent result/email key, explicit `QUEUED_DEV` status | No transactional provider sends mail; guardian/minor workflow needs legal and operational review |
 | Certificates | Functional pilot | Private issuance and minimal public verification without score disclosure | Needs durable identity-aware storage, PDF/document delivery, revocation process, and institutional policy |
-| PostgreSQL | Migration contract plus adapter | Migrations 001–007, seed path, sessions/responses/results support | Identity mapping is hardcoded in the current adapter; AI output persistence is intentionally not added until this is fixed |
+| PostgreSQL | Migration contract plus adapter | Migrations 001–008, stable external-user mapping, sessions/responses/results support, versioned AI output storage | Requires an empty-database rehearsal, Supabase identity mapping, backups, and production operations |
 | Accessibility/performance | Good baseline | ARIA labels, mobile navigation, reduced-motion CSS, loading/error states, lazy-safe UI patterns | Manual screen-reader/keyboard pass and code-splitting remain; Vite warns about a large JS chunk |
-| QA and operations | Documented local gate | 21 backend tests, frontend typecheck/tests, build path, QA report, implementation status, audit | Need staging smoke tests, database rehearsal, provider failures, observability, backups, incident drills |
+| QA and operations | Documented local gate | 22 backend tests, frontend typecheck/tests, build path, QA report, implementation status, audit | Need staging smoke tests, database rehearsal, provider failures, observability, backups, incident drills |
 
 ## AI boundary and setup
 
@@ -47,7 +47,7 @@ Restart the backend. The frontend never receives the key. `GET /ai/status` repor
 1. “AI assessor” must not mean AI scoring. If a model changes correctness, difficulty, item activation, or a student’s score, IAQ would lose reproducibility and make scientific validation impossible.
 2. Interest results are context, not evidence of ability. A high interest score should not inflate a cognitive score or produce a guaranteed career claim.
 3. Null is better than a flattering number. A domain with one or two answers cannot support a meaningful within-profile interpretation.
-4. The current AI output is generated on demand and held in the local process cache. That is intentional: the existing database adapter hardcodes the demo user ID, so durable AI narrative storage would risk cross-user disclosure.
+4. The current AI output is generated on demand, cached by an aggregate input hash, and stored in `ai_result_outputs` when Postgres is configured. Local development remains process-local by design.
 5. Report email is a privacy boundary, not just a form. Names, emails, age, consent version, provider delivery state, retention, and minor/guardian policy must be treated as separate records.
 6. A certificate proves that IAQ issued a completion record. It must never be presented as proof of IQ, diagnosis, school admission, or professional qualification.
 7. The current question quantity is a software readiness milestone, not validation. “120 per domain” does not prove medium-hard difficulty or fairness.

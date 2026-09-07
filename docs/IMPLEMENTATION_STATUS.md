@@ -12,11 +12,12 @@ This release completes the highest-value product loop in local development: star
 - Certificates prove completion/issuance only and the public verification response intentionally excludes scores.
 - Report delivery is idempotent by result/email. Development mode records `QUEUED_DEV` and does not send real mail.
 - Stale browser session recovery: a missing or expired local session pointer is cleared before a fresh assessment is created.
+- Private-pilot guardrails: 120 candidates per domain, authoritative lifecycle metadata, review queue primitives, item-health calculations, score-only result projection, identity capture, minor guardian-consent records, and paid-report gating.
 
 ## Explicitly not production-ready
 
 - The local identity fallback, in-memory repositories, mock payment settlement, and development email provider are not suitable for real student data.
-- Production auth, database migrations, email provider, payment webhooks, guardian consent, retention/deletion jobs, encryption/key management, and monitoring still require deployment configuration and security review.
+- Production auth, provider deployment, live email/payment webhooks, retention/deletion jobs, encryption/key management, and monitoring still require configuration and security review. Guardian consent is implemented as a local workflow but is not yet legally or operationally approved for production.
 - The score remains a provisional within-profile educational signal. There are no population norms, percentiles, clinical claims, or validated career predictions.
 - Certificates are not academic qualifications and do not establish an official IQ score.
 
