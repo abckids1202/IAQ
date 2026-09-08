@@ -175,6 +175,8 @@ def spatial_items() -> List[Dict[str, Any]]:
 
 def memory_items() -> List[Dict[str, Any]]:
     symbols = ["K", "7", "M", "2", "R", "9", "T", "4", "P", "6", "H", "8"]
+    openings = ["Study", "Read", "Observe", "Take in", "Focus on", "Notice", "Hold", "Keep", "Attend to", "Inspect"]
+    focus_phrases = ["the order", "each position", "the sequence from left to right", "the full run", "the symbols in place", "the arrangement as shown", "the order exactly", "each symbol's location", "the displayed arrangement", "the sequence as presented"]
     items: List[Dict[str, Any]] = []
     for index in range(100):
         length = 6 + index % 3
@@ -186,7 +188,11 @@ def memory_items() -> List[Dict[str, Any]]:
         swap = sequence[:]
         swap[1], swap[2] = swap[2], swap[1]
         options, key = _place_correct(answer, [reverse, rotate, " — ".join(swap)], index)
-        items.append(_item(f"MEM-{21 + index:03d}", "working_memory", f"memory_update_{index % 10:02d}", f"Study this {context} sequence for three seconds. It will disappear. Which option matches the sequence exactly? {answer}", options, key, "The correct response preserves every symbol and its position; distractors target reversal, rotation, and adjacent swaps.", "memory", construct="short_term_order_memory"))
+        prompt = f"{openings[index % len(openings)]} this {context} sequence for three seconds, focusing on {focus_phrases[index // len(openings)]}. It will disappear. Which option matches it exactly?"
+        item = _item(f"MEM-{21 + index:03d}", "working_memory", f"memory_update_{index % 10:02d}", prompt, options, key, "The correct response preserves every symbol and its position; distractors target reversal, rotation, and adjacent swaps.", "memory", construct="short_term_order_memory")
+        item["memory_stimulus"] = sequence
+        item["memory_protocol"] = {"study_ms": 3000, "response_timeout_ms": 30000, "replay_allowed": False, "score_method": "exact_option"}
+        items.append(item)
     return items
 
 

@@ -7,3 +7,7 @@ __pycache__/
 .pytest_cache/
 outputs/
 work/
+
+# Research banks contain answer keys and must not be exposed through a public repository.
+data/assessment/*
+!data/assessment/README.md

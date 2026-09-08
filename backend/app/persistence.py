@@ -209,6 +209,28 @@ class PostgresAssessmentStore:
                         (session_id, domain, score, result["score_version"]),
                     )
 
+    def store_result_and_complete_session(self, session_id: str, result: Dict[str, Any]) -> None:
+        """Persist the result and close the session in one database transaction."""
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO assessment_results (id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    ON CONFLICT (session_id) DO NOTHING
+                    """,
+                    (result["id"], session_id, result["composite"], result["confidence"], result["disclaimer"], result["question_count"], result["answered_count"], json.dumps(result["domain_metrics"]), json.dumps(result["quality"]), result["completed_at"]),
+                )
+                for domain, score in result["domain_scores"].items():
+                    cursor.execute(
+                        "INSERT INTO domain_scores (session_id, domain, score, score_version) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        (session_id, domain, score, result["score_version"]),
+                    )
+                cursor.execute(
+                    "UPDATE test_sessions SET status = 'complete', result_id = %s, completed_at = %s WHERE id = %s",
+                    (result["id"], result["completed_at"], session_id),
+                )
+
     def get_result(self, result_id: str) -> Optional[Dict[str, Any]]:
         with self._connection() as connection:
             with connection.cursor() as cursor:

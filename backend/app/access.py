@@ -13,6 +13,12 @@ import secrets
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+# The local repository below is intentionally useful for previews and tests,
+# but it is not a durable production access store. Keep this explicit so a
+# deployment cannot become "ready" merely because an environment variable
+# says postgres while orders, entitlements, and consent still use dictionaries.
+POSTGRES_ACCESS_STORE_READY = False
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()

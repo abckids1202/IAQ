@@ -21,19 +21,21 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
 from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, REVIEWED_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready, reviewed_counts, review_gate_ready
 from .persistence import PostgresAssessmentStore
-from . import access, ai, email_delivery, evaluation, payments, review, supabase_auth
+from . import access, ai, dataset_audit, email_delivery, evaluation, external_data, payments, review, supabase_auth
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 app = FastAPI(title="IAQ API", version="0.1.0", description="Experimental educational profile API")
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):517[0-9]$", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+_configured_origins = [origin.strip() for origin in os.getenv("IAQ_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",") if origin.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_configured_origins, allow_origin_regex=None if os.getenv("IAQ_ENV", "development").lower() == "production" else r"https?://(127\.0\.0\.1|localhost):517[0-9]$", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 DURATION_SECONDS = 35 * 60
@@ -203,6 +205,8 @@ def current_user(request: Optional[Request] = None) -> Dict[str, Any]:
     this fallback in their auth middleware.
     """
     auth_mode = os.getenv("IAQ_AUTH_MODE", "development").lower()
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and auth_mode != "supabase":
+        raise HTTPException(503, "Production authentication is not configured")
     if auth_mode == "supabase":
         try:
             return supabase_auth.user_from_token(_header_token(request) or "")
@@ -220,6 +224,9 @@ def current_user(request: Optional[Request] = None) -> Dict[str, Any]:
 def require_permission(user: Dict[str, Any], permission: str) -> None:
     if permission not in access.permissions_for(user):
         raise HTTPException(403, "You do not have permission to perform this action")
+    staff_permissions = permission.startswith(("admin.", "content.", "school."))
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and staff_permissions and not user.get("mfa_verified"):
+        raise HTTPException(403, "Multi-factor authentication is required for staff access")
 
 
 def serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
@@ -229,7 +236,12 @@ def serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Return a strict student payload; internal provenance never leaves the API."""
     allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
-    return {key: value for key, value in item.items() if key in allowed and value is not None}
+    payload = {key: value for key, value in item.items() if key in allowed and value is not None}
+    if item.get("type") == "memory":
+        # The transient stimulus is necessary to run delayed recall. It is
+        # not the answer key and is never returned as `answer`/`answer_index`.
+        payload["visual"] = item.get("memory_stimulus") or payload.get("visual")
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def admin_item_payload(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,6 +273,10 @@ def persist_session(session: Dict[str, Any], values: Dict[str, Any]) -> None:
 
 def create_randomized_form(mode: str) -> List[str]:
     """Create a balanced, no-repeat form from the reviewed question bank."""
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and not PERSISTENCE:
+        raise HTTPException(503, "Production assessments require PostgreSQL persistence")
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
+        raise HTTPException(503, "Production assessments require the reviewed-item release gate")
     per_domain = 8 if mode == "complete" else 2
     eligible_items = [item for item in ITEMS.values() if item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"}]
     # The local development preview can still exercise the full assessment
@@ -304,6 +320,41 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "service": "iaq-api", "mode": "postgres" if PERSISTENCE else "development_demo"}
 
 
+def runtime_readiness() -> Dict[str, Any]:
+    """Report configuration blockers without exposing provider secrets."""
+    environment = os.getenv("IAQ_ENV", "development").lower()
+    production = environment == "production"
+    auth_mode = os.getenv("IAQ_AUTH_MODE", "development").lower()
+    payments_enabled = os.getenv("PAYMENTS_ENABLED", "true").lower() == "true"
+    require_reviewed_items = os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true"
+    midtrans_live = os.getenv("MIDTRANS_IS_PRODUCTION", "false").lower() == "true" and os.getenv("MIDTRANS_LIVE_ENABLED", "false").lower() == "true"
+    checks = {
+        "database": bool(PERSISTENCE) if production or os.getenv("IAQ_REQUIRE_PERSISTENCE", "false").lower() == "true" else True,
+        "commerce_persistence": bool(PERSISTENCE) and access.POSTGRES_ACCESS_STORE_READY and os.getenv("IAQ_ACCESS_STORE", "memory").lower() == "postgres" if production else True,
+        "supabase_auth": auth_mode == "supabase" and bool(os.getenv("SUPABASE_URL") or os.getenv("SUPABASE_JWKS_URL")) if production else True,
+        "review_gate": review_gate_ready() if production or require_reviewed_items else True,
+        "payments": (not payments_enabled) or (bool(os.getenv("MIDTRANS_SERVER_KEY")) and (not production or midtrans_live)) if production else True,
+        "email": bool(os.getenv("RESEND_API_KEY")) if production else True,
+        "app_base_url": bool(os.getenv("APP_BASE_URL")) if production else True,
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+    return {
+        "environment": environment,
+        "status": "ready" if not blockers else "needs_configuration",
+        "checks": checks,
+        "blockers": blockers,
+        "payment_provider": payments.provider_name(),
+        "auth_mode": auth_mode,
+        "student_sessions": "reviewed_bank_only" if require_reviewed_items else "development_pilot_bank",
+        "note": "A ready response means configuration checks passed; it does not replace merchant, privacy, psychometric, or security approval.",
+    }
+
+
+@app.get("/ready")
+def ready() -> Dict[str, Any]:
+    return runtime_readiness()
+
+
 @app.get("/auth/config")
 def auth_config() -> Dict[str, Any]:
     """Expose safe feature flags; provider secrets never leave the server."""
@@ -313,7 +364,8 @@ def auth_config() -> Dict[str, Any]:
         "email_otp_enabled": os.getenv("AUTH_EMAIL_OTP_ENABLED", "true").lower() == "true",
         "payments_enabled": os.getenv("PAYMENTS_ENABLED", "true").lower() == "true",
         "payment_provider": "midtrans" if os.getenv("MIDTRANS_SERVER_KEY") else "mock",
-        "production_ready": False,
+        "production_ready": runtime_readiness()["status"] == "ready" and os.getenv("IAQ_ENV", "development").lower() == "production",
+        "readiness": runtime_readiness(),
     }
 
 
@@ -438,6 +490,8 @@ def checkout_order(order_id: str, request: Request) -> Dict[str, Any]:
         return {"order": serialize_order(order), "payment_attempt": None, "message": "Access is already active."}
     if os.getenv("PAYMENTS_ENABLED", "true").lower() != "true":
         raise HTTPException(503, "Payments are not enabled")
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and payments.provider_name() != "midtrans":
+        raise HTTPException(503, "Production checkout requires Midtrans configuration")
     attempt = access.create_payment_attempt(order_id)
     if payments.provider_name() == "midtrans":
         try:
@@ -777,8 +831,7 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
         domain_metrics[domain] = {**metric, "score": value, "relative": relative}
     RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "composite": score.composite, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
     if PERSISTENCE:
-        PERSISTENCE.store_result(session_id, RESULTS[result_id])
-        PERSISTENCE.update_session(session_id, {"status": "complete", "result_id": result_id})
+        PERSISTENCE.store_result_and_complete_session(session_id, RESULTS[result_id])
     else:
         session["status"] = "complete"
         session["result_id"] = result_id
@@ -856,6 +909,8 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
 
 @app.post("/guardian-consents")
 def create_guardian_consent(payload: GuardianConsentCreate, request: Request) -> Dict[str, Any]:
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email):
+        raise HTTPException(422, "Enter a valid guardian email address")
     user = current_user(request)
     consent_id = str(uuid4())
     token = secrets.token_urlsafe(24)
@@ -998,6 +1053,8 @@ def ai_directions(payload: AIDirectionsCreate, request: Request) -> Dict[str, An
 def request_report_delivery(result_id: str, payload: ReportDeliveryCreate, request: Request) -> Dict[str, Any]:
     """Send or queue a private full report through the configured adapter."""
     user = current_user(request)
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and not email_delivery.configured():
+        raise HTTPException(503, "Production report delivery is not configured")
     if not has_full_report_access(user["id"]):
         raise HTTPException(402, "Unlock the full report before requesting report delivery")
     result = _result_record(result_id, request)
@@ -1059,23 +1116,31 @@ def verify_certificate(identifier: str) -> Dict[str, Any]:
 
 
 @app.post("/majors/{major_id}/save")
-def save_major(major_id: str) -> Dict[str, Any]:
-    SAVED_MAJORS.setdefault("demo-student", [])
-    if major_id not in SAVED_MAJORS["demo-student"]:
-        SAVED_MAJORS["demo-student"].append(major_id)
+def save_major(major_id: str, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    if not any(major["id"] == major_id for major in MAJORS):
+        raise HTTPException(404, "Direction not found")
+    SAVED_MAJORS.setdefault(user["id"], [])
+    if major_id not in SAVED_MAJORS[user["id"]]:
+        SAVED_MAJORS[user["id"]].append(major_id)
     return {"saved": True, "major_id": major_id}
 
 
 @app.delete("/majors/{major_id}/save")
-def unsave_major(major_id: str) -> Dict[str, Any]:
-    SAVED_MAJORS.setdefault("demo-student", [])
-    SAVED_MAJORS["demo-student"] = [item for item in SAVED_MAJORS["demo-student"] if item != major_id]
+def unsave_major(major_id: str, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    SAVED_MAJORS.setdefault(user["id"], [])
+    SAVED_MAJORS[user["id"]] = [item for item in SAVED_MAJORS[user["id"]] if item != major_id]
     return {"saved": False, "major_id": major_id}
 
 
 @app.get("/tracker")
-def tracker() -> Dict[str, Any]:
-    return {"student_id": "demo-student", "assessment_history": [{"date": "2026-08-12", "version": "IAQ-COG-0.3", "confidence": "moderate"}], "interest_evolution": [{"date": "2026-09-05", "code": "IAC"}], "readiness": {"evidence_count": 5, "projects": 2}, "saved_majors": SAVED_MAJORS.get("demo-student", [])}
+def tracker(request: Request) -> Dict[str, Any]:
+    user_id = current_user(request)["id"]
+    user_results = [result for result in RESULTS.values() if session_for(result["session_id"]) and session_for(result["session_id"]).get("user_id") == user_id]
+    history = [{"date": result.get("completed_at"), "version": result.get("assessment_version"), "confidence": result.get("confidence")} for result in sorted(user_results, key=lambda result: result.get("completed_at", ""))]
+    interest = access.INTEREST_ATTEMPTS.get(user_id)
+    return {"student_id": user_id, "assessment_history": history, "interest_evolution": [{"date": interest.get("created_at"), "code": interest.get("code")} ] if interest else [], "readiness": {"evidence_count": 0, "projects": 0}, "saved_majors": SAVED_MAJORS.get(user_id, [])}
 
 
 @app.get("/counselor/students")
@@ -1177,6 +1242,74 @@ def item_health(request: Request, domain: Optional[str] = Query(default=None)) -
         items = [item for item in items if item.get("domain") == domain]
     rows = [response for session in SESSIONS.values() for response in session.get("responses", {}).values()]
     return evaluation.bank_health(items, rows)
+
+
+@app.get("/admin/dataset/summary")
+def external_dataset_summary(request: Request) -> Dict[str, Any]:
+    """Return safe inventory metadata for the staged research datasets."""
+    require_permission(current_user(request), "content.items.read")
+    return external_data.dataset_summary()
+
+
+@app.get("/admin/dataset/preview")
+def external_dataset_preview(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    domain: Optional[str] = Query(default=None),
+    dataset: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    """Protected reviewer preview; answer keys are deliberately admin-only."""
+    require_permission(current_user(request), "content.items.read")
+    items = external_data.preview_items(limit=limit, domain=domain, dataset=dataset)
+    return {
+        "items": items,
+        "total": len(items),
+        "filters": {"limit": limit, "domain": domain, "dataset": dataset, "language": "en"},
+        "warning": "Research candidates only. Every item is unreviewed and excluded from student scoring.",
+    }
+
+
+@app.get("/admin/dataset/items/{item_id}")
+def external_dataset_item(item_id: str, request: Request) -> Dict[str, Any]:
+    """Return one quarantined candidate for reviewer preview."""
+    require_permission(current_user(request), "content.items.read")
+    item = external_data.find_external_item(item_id)
+    if not item:
+        raise HTTPException(404, "Dataset candidate not found")
+    return item
+
+
+@app.post("/admin/dataset/items/{item_id}/review")
+def review_external_dataset_item(item_id: str, payload: ItemReviewCreate, request: Request) -> Dict[str, Any]:
+    """Record a review decision; staged candidates never activate from this endpoint."""
+    require_permission(current_user(request), "content.items.review")
+    reviewer = current_user(request)
+    try:
+        return external_data.review_external_item(item_id, reviewer["id"], reviewer["roles"][0], payload.decision, payload.notes, payload.checks)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.get("/admin/dataset/review-summary")
+def external_dataset_review_summary(request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "content.health.read")
+    return external_data.review_summary()
+
+
+@app.get("/admin/dataset/audit")
+def external_dataset_audit(request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "content.health.read")
+    return dataset_audit.audit_catalog()
+
+
+@app.get("/admin/dataset/assets/{dataset}/{asset_path:path}")
+def external_dataset_asset(dataset: str, asset_path: str, request: Request) -> FileResponse:
+    """Serve staged preview images only to authorised reviewers."""
+    require_permission(current_user(request), "content.items.read")
+    asset = external_data.resolve_asset_path(dataset, asset_path)
+    if not asset:
+        raise HTTPException(404, "Dataset asset not found")
+    return FileResponse(asset)
 
 
 def question_bank_summary(request: Request = None) -> Dict[str, Any]:

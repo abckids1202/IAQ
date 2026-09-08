@@ -51,16 +51,6 @@ export const alternatives: Major[] = [
   { name: 'Communication Design', family: 'Creative communication', fit: 68, readiness: 80, feasibility: 'Ready to explore', confidence: 54, reason: 'A practical direction for visual storytelling and problem framing.', tags: ['Creative', 'Story'], accent: '#F56B5D' }
 ]
 
-export const initialScores: Record<Domain, number> = {
-  'Abstract reasoning': 82,
-  'Deductive logic': 76,
-  'Numerical reasoning': 71,
-  'Verbal reasoning': 64,
-  'Visual-spatial reasoning': 86,
-  'Working memory': 69,
-  'Processing speed': 58
-}
-
 export const recommendations = [
   { label: 'Try this week', title: 'Build a tiny data story', body: 'Use a public dataset, find one pattern, and explain it in three visuals.', icon: '↗' },
   { label: 'Strengthen', title: 'Quantitative foundations', body: 'Spend one focused session on ratios, functions, or introductory statistics.', icon: '＋' },

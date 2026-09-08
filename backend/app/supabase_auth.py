@@ -45,7 +45,9 @@ def user_from_token(token: str) -> Dict[str, Any]:
     user_metadata = claims.get("user_metadata") or {}
     app_metadata = claims.get("app_metadata") or {}
     allowed_roles = {"student", "guardian", "counselor", "school_admin", "content_reviewer", "platform_admin"}
-    raw_roles = app_metadata.get("roles") or user_metadata.get("roles") or ["student"]
+    # Roles are authorization data. Only server-managed app_metadata is
+    # trusted; user-editable metadata must never be able to grant staff access.
+    raw_roles = app_metadata.get("roles") or ["student"]
     roles = [role for role in raw_roles if role in allowed_roles] if isinstance(raw_roles, list) else ["student"]
     return {
         "id": subject,

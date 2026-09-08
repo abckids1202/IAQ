@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { alternatives, domainMeta, domains, initialScores, majors, questions, recommendations } from './data'
-import { captureIdentity, finishAssessment, getAIStatus, getInterestResult, requestAIDirections, requestAIInterpretation, requestReportDelivery, resumeRandomizedAssessment, saveAndGetNext, startRandomizedAssessment, submitFeedback, type AIDirectionContext, type AIInterpretation, type InterestResult } from './api'
+import { alternatives, domainMeta, domains, majors, questions, recommendations } from './data'
+import { captureIdentity, finishAssessment, getAIStatus, getAssessmentResult, getDatasetAsset, getDatasetAudit, getDatasetPreview, getDatasetSummary, getInterestResult, requestAIDirections, requestAIInterpretation, requestReportDelivery, resumeRandomizedAssessment, reviewDatasetCandidate, saveAndGetNext, startRandomizedAssessment, submitFeedback, type AIDirectionContext, type AIInterpretation, type DatasetAudit, type DatasetCandidate, type DatasetSummary, type InterestResult } from './api'
 import { AccountSettings, AuthCallback, AuthLogin, Billing, Checkout, PaymentPage, Pricing } from './access'
 import { CertificateVerification, Certificates, InterestAssessment, LegalPage, PublicInfoPage } from './product'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
+const emptyScores = Object.fromEntries(domains.map((domain) => [domain, 0])) as Record<Domain, number>
 const initialProfile: Profile = {
-  name: 'Ari Pratama', completed: false, consented: true, role: 'student', lastAssessment: '', nextAssessment: 'After enough new evidence', strengths: [], scores: initialScores
+  name: 'Ari Pratama', completed: false, consented: true, role: 'student', lastAssessment: '', nextAssessment: 'After enough new evidence', strengths: [], scores: emptyScores
 }
 
 const ASSESSMENT_SESSION_KEY = 'iaq-active-assessment-session'
@@ -132,10 +133,19 @@ function App() {
   useEffect(() => { localStorage.setItem('iaq-assessment-complete', String(assessmentComplete)) }, [assessmentComplete])
 
   const toggleMajor = (name: string) => setSavedMajors((items) => items.includes(name) ? items.filter((item) => item !== name) : [...items, name])
-  const completeAssessment = (result: AssessmentResult) => {
+  const applyResult = (result: AssessmentResult) => {
     setProfile((current) => ({ ...current, completed: true, lastAssessment: new Date(result.completedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), composite: result.composite, confidence: result.confidence, scores: result.domainScores, strengths: [...domains].filter((domain) => result.domainScores[domain] != null).sort((a, b) => (result.domainScores[b] ?? -1) - (result.domainScores[a] ?? -1)).slice(0, 2), lastResult: result }))
     setAssessmentComplete(true)
   }
+  const completeAssessment = (result: AssessmentResult) => {
+    localStorage.setItem('iaq-last-result-id', result.id)
+    applyResult(result)
+  }
+  useEffect(() => {
+    if (profile.lastResult) return
+    const resultId = localStorage.getItem('iaq-last-result-id')
+    if (resultId) void getAssessmentResult(resultId).then(applyResult).catch(() => localStorage.removeItem('iaq-last-result-id'))
+  }, [profile.lastResult])
 
   const quietMode = location.pathname === '/assess/session'
   return <><AppBootLoader active={booting} /><ScrollProgress /><CursorFollower /><Routes>
@@ -375,8 +385,8 @@ function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, 
         setAnswers((current) => ({ ...current, [question.id]: selected }))
         if (nextQuestion) setApiQuestion(nextQuestion)
         else {
-          await finishAssessment(apiSession)
-          onComplete(initialScores)
+          const result = await finishAssessment(apiSession)
+          onComplete(Object.fromEntries(Object.entries(result.domainScores).map(([domain, score]) => [domain, score ?? 0])) as Record<Domain, number>)
           navigate('/results')
         }
       } catch {
@@ -385,8 +395,7 @@ function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, 
         setSubmitting(false)
       }
     } else if (index === questions.length - 1) {
-      onComplete(initialScores)
-      navigate('/results')
+      setApiError('The IAQ API is required to create a real scored result. Start the backend and try again.')
     } else setIndex((i) => i + 1)
   }
   const restart = async () => {
@@ -431,6 +440,32 @@ function DeterministicStimulus({ question }: { question: Question }) {
     const rotation = Number(rotationText) || 0
     return <svg className="stimulus-tile" viewBox="0 0 100 100" role="img" aria-label={`${fill} ${shape} visual ${index + 1}`} key={`${tile}-${index}`}><defs><pattern id={`stripe-${question.id.replace(/[^a-z0-9]/gi, '')}`} width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="8" stroke="#315CFF" strokeWidth="3" /></pattern></defs>{drawShape(shape, fill, rotation)}</svg>
   })}</div><span className="stimulus-note">deterministic visual stimulus</span></div>
+}
+
+function MemoryTrial({ question, selected, onChoose, disabled }: { question: Question; selected?: string; onChoose: (option: string) => void; disabled: boolean }) {
+  const [phase, setPhase] = useState<'intro' | 'study' | 'recall'>('intro')
+  const [remaining, setRemaining] = useState(3)
+  const visual = question.visual?.filter(Boolean) || []
+
+  useEffect(() => {
+    setPhase('intro')
+    setRemaining(3)
+  }, [question.id])
+
+  useEffect(() => {
+    if (phase !== 'study') return
+    const started = Date.now()
+    const duration = 3000
+    const tick = () => setRemaining(Math.max(0, Math.ceil((duration - (Date.now() - started)) / 1000)))
+    tick()
+    const interval = window.setInterval(tick, 100)
+    const timeout = window.setTimeout(() => setPhase('recall'), duration)
+    return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
+  }, [phase])
+
+  if (phase === 'intro') return <div className="memory-trial memory-intro"><div className="memory-step-index">01</div><div><span className="eyebrow">Working memory / study first</span><h2>You’ll see the material for three seconds.</h2><p>It will disappear before the answer choices appear. No replay is available.</p></div><button className="button secondary" onClick={() => setPhase('study')} disabled={disabled}>Show me <span>→</span></button></div>
+  if (phase === 'study') return <div className="memory-trial memory-study" aria-live="polite"><div className="memory-study-head"><span className="eyebrow">Study now</span><span className="memory-countdown">{remaining}s</span></div><div className="memory-stimulus" aria-label="Temporary memory stimulus">{visual.length > 1 ? visual.map((part, index) => <span key={`${part}-${index}`}>{part}</span>) : <strong>{visual[0] || 'Study the instruction carefully.'}</strong>}</div><div className="memory-progress"><span style={{ width: `${Math.max(8, ((3 - remaining + .2) / 3) * 100)}%` }} /></div><small>Keep the order and details in mind.</small></div>
+  return <div className="memory-trial memory-recall"><div className="memory-step-index">02</div><div className="memory-recall-copy"><span className="eyebrow">Recall</span><h2>{question.prompt}</h2><p>The study card is hidden. Choose the one best answer.</p></div><div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => onChoose(option)} disabled={disabled} aria-pressed={selected === option}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></div>
 }
 
 function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => void }) {
@@ -538,7 +573,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
   const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0')
   const seconds = (timeLeft % 60).toString().padStart(2, '0')
   const timerClass = timeLeft <= 300 ? 'timer-warning' : timeLeft <= 600 ? 'timer-caution' : ''
-  return <div className="assessment-screen"><header className="assessment-header"><div className="assessment-brand"><Brand /><span className="assessment-name">IAQ Cognitive Profile</span></div><div className="assessment-progress"><span>Progress</span><div className="progress-track"><span style={{ width: `${Math.max(3, progress)}%` }} /></div><span className="mono-label">{String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><div className="assessment-actions"><button className="text-button" onClick={() => setApiError('Your test is timed. If you leave, the countdown continues.')}>Need help?</button><Link className="assessment-exit" to="/">Leave test</Link></div></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className={`timer-label ${timerClass}`} aria-live="polite">Time left {minutes}:{seconds}</span></div>{timeLeft <= 600 && <div className={`timer-notice ${timerClass}`}>{timeLeft <= 300 ? 'Five minutes left. Choose your best answer and keep moving.' : 'Ten minutes left. Keep an eye on the clock.'}</div>}<AnimatePresence mode="wait"><motion.div key={question.id} className="question-card" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{(question.visual || question.renderType === 'svg_stimulus') && <DeterministicStimulus question={question} />}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)} aria-pressed={selected === option}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></motion.div></AnimatePresence><div className="assessment-controls"><span className="autosave">{selected ? 'Answer ready' : 'Choose one answer to continue'}</span><button className="button primary" disabled={!selected || submitting || timeLeft === 0} onClick={next}>{submitting ? 'Saving…' : answered + 1 >= totalQuestions ? 'See my results' : 'Next question'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error" role="alert">{apiError}</div>}<div className="assessment-footnote">35 minutes total · 8 questions from each thinking area · your answers are saved as you go.</div></main></div>
+  return <div className="assessment-screen"><header className="assessment-header"><div className="assessment-brand"><Brand /><span className="assessment-name">IAQ Cognitive Profile</span></div><div className="assessment-progress"><span>Progress</span><div className="progress-track"><span style={{ width: `${Math.max(3, progress)}%` }} /></div><span className="mono-label">{String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {totalQuestions}</span></div><div className="assessment-actions"><button className="text-button" onClick={() => setApiError('Your test is timed. If you leave, the countdown continues.')}>Need help?</button><Link className="assessment-exit" to="/">Leave test</Link></div></header><main className="assessment-main"><div className="assessment-meta"><span className="eyebrow">Question {String(Math.min(answered + 1, totalQuestions)).padStart(2, '0')} / {question.domain}</span><span className={`timer-label ${timerClass}`} aria-live="polite">Time left {minutes}:{seconds}</span></div>{timeLeft <= 600 && <div className={`timer-notice ${timerClass}`}>{timeLeft <= 300 ? 'Five minutes left. Choose your best answer and keep moving.' : 'Ten minutes left. Keep an eye on the clock.'}</div>}<AnimatePresence mode="wait"><motion.div key={question.id} className={`question-card ${question.type === 'memory' ? 'memory-question-card' : ''}`} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: .2 }}>{question.type === 'memory' ? <MemoryTrial question={question} selected={selected} onChoose={choose} disabled={submitting || timeLeft === 0} /> : <><div className="question-copy"><h1>{question.prompt}</h1>{question.helper && <p>{question.helper}</p>}</div>{(question.visual || question.renderType === 'svg_stimulus') && <DeterministicStimulus question={question} />}<div className="option-grid">{question.options.map((option, optionIndex) => <button key={option} className={`option ${selected === option ? 'selected' : ''}`} onClick={() => choose(option)} disabled={submitting || timeLeft === 0} aria-pressed={selected === option}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{option}</span><span className="option-check">{selected === option ? '✓' : ''}</span></button>)}</div></>}</motion.div></AnimatePresence><div className="assessment-controls"><span className="autosave">{selected ? 'Answer ready' : question.type === 'memory' ? 'Complete the recall step to continue' : 'Choose one answer to continue'}</span><button className="button primary" disabled={!selected || submitting || timeLeft === 0} onClick={next}>{submitting ? 'Saving…' : answered + 1 >= totalQuestions ? 'See my results' : 'Next question'} <span>→</span></button></div>{apiError && <div className="assessment-inline-error" role="alert">{apiError}</div>}<div className="assessment-footnote">35 minutes total · 8 questions from each thinking area · your answers are saved as you go.</div></main></div>
 }
 
 function Compass({ profile, savedMajors, toggleMajor }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
@@ -631,7 +666,13 @@ function IdentityCaptureCard({ onComplete }: { onComplete: () => void }) {
 }
 
 function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {
-  const result = profile.lastResult
+  const [liveResult, setLiveResult] = useState<AssessmentResult | undefined>(profile.lastResult)
+  useEffect(() => {
+    if (!profile.lastResult) return
+    setLiveResult(profile.lastResult)
+    void getAssessmentResult(profile.lastResult.id).then(setLiveResult).catch(() => undefined)
+  }, [profile.lastResult?.id])
+  const result = liveResult
   const [identityRequired, setIdentityRequired] = useState(() => localStorage.getItem('iaq-identity-captured') !== 'true')
   if (!result) return <div className="page results-empty"><PageIntro eyebrow="Your results / Private report" title={<>Your report starts<br /><em>after your test.</em></>} body="Complete the 35-minute assessment to see your actual answers, timing, and seven-domain profile." action={<Link className="button primary" to="/assess">Start test <span>→</span></Link>} /><section className="panel empty-report-panel"><div className="eyebrow">No scored result yet</div><h2>Nothing to compare yet.</h2><p>IAQ will never fill this report with a demo score. Your bars appear after a real session is submitted.</p><Link className="text-button" to="/methodology">Read how scoring works ↗</Link></section></div>
   if (identityRequired) return <div className="page results-page"><PageIntro eyebrow="Your results / Private report" title={<>Your test is done.<br /><em>Let’s keep it private.</em></>} body="Add the minimum details needed to attach this result to you. You can read the score immediately after this step." /><IdentityCaptureCard onComplete={() => setIdentityRequired(false)} /></div>
@@ -666,9 +707,91 @@ function School() {
 }
 function Kpi({ label, value, detail }: { label: string; value: string; detail: string }) { return <div className="kpi"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div> }
 
+const reviewChecks = [
+  ['one_correct_answer', 'One correct answer'],
+  ['unambiguous', 'No ambiguity'],
+  ['instructions_clear', 'Instructions are clear'],
+  ['reading_level_ok', 'Reading level fits'],
+  ['rendering_ok', 'Rendering works'],
+  ['distractors_plausible', 'Distractors are plausible'],
+  ['bias_reviewed', 'Bias reviewed'],
+  ['family_unique_in_form', 'Family can be unique in a form'],
+] as const
+
+function CandidateValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span className="muted">—</span>
+  if (typeof value === 'object') return <code className="candidate-json">{JSON.stringify(value)}</code>
+  return <span>{String(value)}</span>
+}
+
+function DatasetReviewPanel() {
+  const [summary, setSummary] = useState<DatasetSummary | null>(null)
+  const [audit, setAudit] = useState<DatasetAudit | null>(null)
+  const [items, setItems] = useState<DatasetCandidate[]>([])
+  const [domain, setDomain] = useState('')
+  const [dataset, setDataset] = useState('')
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [checks, setChecks] = useState<Record<string, boolean>>({})
+  const [notes, setNotes] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [assetUrl, setAssetUrl] = useState('')
+  const selected = items[selectedIndex]
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      // Keep the review slice responsive even when the full-bank machine audit is
+      // still scanning thousands of records. The audit is useful context, but it
+      // should never prevent a reviewer from opening a candidate.
+      const [nextSummary, preview] = await Promise.all([getDatasetSummary(), getDatasetPreview({ domain: domain || undefined, dataset: dataset || undefined, limit: 24 })])
+      setSummary(nextSummary)
+      setItems(preview.items)
+      setSelectedIndex(0)
+      try {
+        setAudit(await getDatasetAudit())
+      } catch {
+        // Leave the last successful audit visible and keep the candidate review
+        // usable. A later refresh can retry the audit independently.
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The staged question bank could not load.')
+    } finally { setLoading(false) }
+  }
+
+  useEffect(() => { void load() }, [domain, dataset])
+  useEffect(() => {
+    setChecks(Object.fromEntries(reviewChecks.map(([key]) => [key, false])))
+    setNotes('')
+  }, [selected?.id])
+  useEffect(() => {
+    let active = true
+    setAssetUrl('')
+    if (selected?.asset_path && selected.asset_exists) void getDatasetAsset(selected.asset_path).then((url) => { if (active) setAssetUrl(url); else URL.revokeObjectURL(url) }).catch(() => undefined)
+    return () => { active = false; setAssetUrl((url) => { if (url) URL.revokeObjectURL(url); return '' }) }
+  }, [selected?.id, selected?.asset_path, selected?.asset_exists])
+
+  const decide = async (decision: 'approve' | 'reject' | 'changes_requested') => {
+    if (!selected) return
+    setBusy(true); setError('')
+    try {
+      await reviewDatasetCandidate(selected.id, { decision, notes, checks })
+      await load()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The review could not be saved.')
+    } finally { setBusy(false) }
+  }
+
+  const domainsInBank = summary ? Object.keys(summary.totals.by_domain) : []
+  const datasetsInBank = summary ? [...new Set(summary.files.map((file) => file.dataset))] : []
+  return <section className="panel dataset-review-panel"><div className="dataset-review-head"><div><div className="eyebrow">Staged research bank / reviewer-only</div><h2>Review the evidence before it reaches students.</h2><p>Imported records stay quarantined as DRAFT. Approvals move a candidate to HUMAN_REVIEWED only; pilot activation remains a separate release decision.</p></div><div className="dataset-head-status"><span className="mono-label">{summary ? `${summary.totals.records.toLocaleString()} candidates` : 'Loading bank…'}</span>{audit && <span className={audit.machine_integrity_passed ? 'audit-pass' : 'audit-fail'}>{audit.machine_integrity_passed ? 'Machine audit passed' : `${audit.error_count} audit flags`}</span>}</div></div>{error && <div className="form-error" role="alert">{error}</div>}<div className="dataset-filter-row"><label>Thinking area<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">All areas</option>{domainsInBank.map((item) => <option value={item} key={item}>{item.replaceAll('_', ' ')}</option>)}</select></label><label>Source dataset<select value={dataset} onChange={(event) => setDataset(event.target.value)}><option value="">All sources</option>{datasetsInBank.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><div className="dataset-safety-note"><strong>Student use: off</strong><span>Answer keys stay behind this reviewer boundary.</span></div></div>{loading ? <div className="dataset-empty"><span className="eyebrow">Question studio</span><h3>Loading a review slice…</h3><p>Only a small preview is loaded into the workspace; the full bank stays server-side.</p></div> : !selected ? <div className="dataset-empty"><span className="eyebrow">No candidates</span><h3>Nothing matches these filters.</h3><p>Choose another thinking area or source dataset.</p></div> : <div className="dataset-review-workspace"><div className="candidate-list" aria-label="Dataset candidates">{items.map((item, index) => <button className={`candidate-list-item ${index === selectedIndex ? 'selected' : ''}`} key={item.id} onClick={() => setSelectedIndex(index)}><span className="candidate-list-number">{String(index + 1).padStart(2, '0')}</span><span><strong>{item.source_id}</strong><small>{item.domain.replaceAll('_', ' ')} · {item.review_status}</small></span><span className="candidate-list-arrow">→</span></button>)}</div><article className="candidate-detail"><div className="candidate-detail-top"><div><span className="eyebrow">{selected.domain.replaceAll('_', ' ')} / {selected.item_family_id}</span><h3>{selected.prompt || selected.question || 'Untitled candidate'}</h3></div><span className={`lifecycle ${selected.review_status.replaceAll('_', ' ')}`}>{selected.review_status}</span></div>{assetUrl && <img className="candidate-image" src={assetUrl} alt="Question stimulus preview" />}{Boolean(selected.stimulus) && !selected.asset_path && <div className="candidate-stimulus"><span className="eyebrow">Stimulus</span><CandidateValue value={selected.stimulus} /></div>}<div className="candidate-options"><span className="eyebrow">Options</span><div className="candidate-option-grid">{selected.options?.map((option, index) => <div className={`candidate-option ${JSON.stringify(option) === JSON.stringify(selected.answer) ? 'answer' : ''}`} key={`${selected.id}-${index}`}><b>{String.fromCharCode(65 + index)}</b><CandidateValue value={option} /></div>)}</div></div><div className="candidate-answer"><span><span className="eyebrow">Verified answer / reviewer only</span><strong><CandidateValue value={selected.answer} /></strong></span><span className="candidate-source"><b>{selected.provenance?.source_license || 'License review required'}</b>{selected.provenance?.source_url ? <a href={selected.provenance.source_url} target="_blank" rel="noreferrer">Open source ↗</a> : <small>{selected.source_file}</small>}</span></div><div className="candidate-meta"><span><b>Origin</b>{selected.data_origin}</span><span><b>Version</b>V{selected.content_version}</span><span><b>Family</b>{selected.item_family_id}</span><span><b>Production</b>{selected.production_eligible ? 'Eligible' : 'Blocked'}</span></div><div className="candidate-review-form"><div><span className="eyebrow">Independent review checklist</span><div className="review-check-grid">{reviewChecks.map(([key, label]) => <label key={key}><input type="checkbox" checked={Boolean(checks[key])} onChange={(event) => setChecks((current) => ({ ...current, [key]: event.target.checked }))} />{label}</label>)}</div></div><label className="review-notes">Reviewer note<textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} placeholder="What should the second reviewer know?" /></label><div className="review-actions"><button className="button ghost" onClick={() => decide('changes_requested')} disabled={busy}>Request changes</button><button className="button ghost danger-button" onClick={() => decide('reject')} disabled={busy}>Reject</button><button className="button primary" onClick={() => decide('approve')} disabled={busy || reviewChecks.some(([key]) => !checks[key])}>{busy ? 'Saving…' : 'Approve this review'} <span>→</span></button></div></div></article></div>}<div className="dataset-review-foot"><span>{selected ? `Candidate ${selectedIndex + 1} of ${items.length} in this review slice` : 'No candidate selected'}</span><span>{audit ? `${audit.unique_ids.toLocaleString()} unique IDs · ${audit.unique_families.toLocaleString()} families` : 'Audit pending'}</span></div></section>
+}
+
 function Admin() {
   const items = [{ id: 'GF-MAT-001', title: 'Matrix rotation / count', domain: 'Abstract reasoning', status: 'Active', responses: 342, difficulty: '0.62', flag: '' }, { id: 'LOG-081', title: 'Conditional studio logic', domain: 'Deductive logic', status: 'Pilot', responses: 84, difficulty: '0.48', flag: 'Low discrimination' }, { id: 'NUM-024', title: 'Exponential sequence', domain: 'Numerical reasoning', status: 'Review', responses: 0, difficulty: '—', flag: 'Insufficient data' }, { id: 'VRB-017', title: 'Evidence and inference', domain: 'Verbal reasoning', status: 'Active', responses: 219, difficulty: '0.71', flag: '' }]
-  return <div className="page ops-page"><PageIntro eyebrow="Question studio / Content review" title={<>Make every question<br /><em>worth asking.</em></>} body="Manage reviewed questions, check how they are behaving, and keep early experiments separate from real evidence." action={<button className="button primary">Add a question <span>＋</span></button>} /><div className="studio-banner"><div><span className="eyebrow">Question journey</span><strong>Draft → Checked → Reviewed → Pilot → Calibrated → Live</strong></div><span className="mono-label">12 live / 06 to review</span></div><section className="panel item-table-panel"><div className="table-head"><div><div className="eyebrow">Question bank / versioned</div><h2>How are the questions doing?</h2></div><div className="filter-row"><button className="filter active">All questions</button><button className="filter">Needs review</button><button className="filter">＋ Filter</button></div></div><div className="item-table"><div className="item-row item-label"><span>Question</span><span>Thinking area</span><span>Status</span><span>Answers</span><span>Difficulty</span><span>Health</span><span /></div>{items.map((item) => <div className="item-row" key={item.id}><div><span className="mono-label">{item.id} / V1</span><strong>{item.title}</strong></div><span>{item.domain}</span><span className={`lifecycle ${item.status.toLowerCase()}`}>{item.status}</span><span className="mono-value">{item.responses || '—'}</span><span className="mono-value">{item.difficulty}</span><span className={item.flag ? 'health-flag' : 'health-good'}>{item.flag || 'Healthy'}</span><button className="table-action">Open ↗</button></div>)}</div></section><div className="admin-bottom"><section className="panel item-detail"><div className="eyebrow">Selected question / LOG-081</div><h2>Conditional studio logic</h2><p>“If the studio is open, the green light is on. The green light is off. Which conclusion is safest?”</p><div className="answer-preview"><span className="correct">A</span><span>It is closed</span><span className="answer-key">answer key / protected</span></div><div className="detail-stats"><Metric label="Correct rate" value={48} /><Metric label="Separates levels" value={31} /><Metric label="Confusion reports" value={18} /></div></section><section className="panel review-queue"><div className="eyebrow">Review queue / 03</div><h2>Needs a second look</h2><div className="queue-list"><div><span className="queue-dot coral" /><span><strong>LOG-081</strong> not separating well</span><b>→</b></div><div><span className="queue-dot orange" /><span><strong>VIS-033</strong> screen issue</span><b>→</b></div><div><span className="queue-dot blue" /><span><strong>NUM-024</strong> not enough answers yet</span><b>→</b></div></div><button className="text-button">Open review queue ↗</button></section></div></div>
+  return <div className="page ops-page"><PageIntro eyebrow="Question studio / Content review" title={<>Make every question<br /><em>worth asking.</em></>} body="Manage reviewed questions, check how they are behaving, and keep early experiments separate from real evidence." action={<button className="button primary">Add a question <span>＋</span></button>} /><div className="studio-banner"><div><span className="eyebrow">Question journey</span><strong>Draft → Checked → Reviewed → Pilot → Calibrated → Live</strong></div><span className="mono-label">Imported bank / review first</span></div><DatasetReviewPanel /><section className="panel item-table-panel"><div className="table-head"><div><div className="eyebrow">Production bank / versioned</div><h2>How are the live questions doing?</h2></div><div className="filter-row"><button className="filter active">All questions</button><button className="filter">Needs review</button><button className="filter">＋ Filter</button></div></div><div className="item-table"><div className="item-row item-label"><span>Question</span><span>Thinking area</span><span>Status</span><span>Answers</span><span>Difficulty</span><span>Health</span><span /></div>{items.map((item) => <div className="item-row" key={item.id}><div><span className="mono-label">{item.id} / V1</span><strong>{item.title}</strong></div><span>{item.domain}</span><span className={`lifecycle ${item.status.toLowerCase()}`}>{item.status}</span><span className="mono-value">{item.responses || '—'}</span><span className="mono-value">{item.difficulty}</span><span className={item.flag ? 'health-flag' : 'health-good'}>{item.flag || 'Healthy'}</span><button className="table-action">Open ↗</button></div>)}</div></section><div className="admin-bottom"><section className="panel item-detail"><div className="eyebrow">Selected question / LOG-081</div><h2>Conditional studio logic</h2><p>“If the studio is open, the green light is on. The green light is off. Which conclusion is safest?”</p><div className="answer-preview"><span className="correct">A</span><span>It is closed</span><span className="answer-key">answer key / protected</span></div><div className="detail-stats"><Metric label="Correct rate" value={48} /><Metric label="Separates levels" value={31} /><Metric label="Confusion reports" value={18} /></div></section><section className="panel review-queue"><div className="eyebrow">Review queue / 03</div><h2>Needs a second look</h2><div className="queue-list"><div><span className="queue-dot coral" /><span><strong>LOG-081</strong> not separating well</span><b>→</b></div><div><span className="queue-dot orange" /><span><strong>VIS-033</strong> screen issue</span><b>→</b></div><div><span className="queue-dot blue" /><span><strong>NUM-024</strong> not enough answers yet</span><b>→</b></div></div><button className="text-button">Open review queue ↗</button></section></div></div>
 }
 
 function FAQSection() {

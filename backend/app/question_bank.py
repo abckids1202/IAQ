@@ -7,6 +7,7 @@ real response data and psychometric review.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List
 
 from .item_factory import generated_items
@@ -178,6 +179,53 @@ MEMORY: List[Dict[str, Any]] = [
     _item("MEM-020", "working_memory", "sequence_recall", "Remember B — 4 — Q — 7 — M. Which entry was fourth?", ["A. B", "B. 4", "C. Q", "D. 7"], "D. 7", "The fourth entry is 7.", "memory"),
 ]
 
+
+def _prepare_memory_items(items: Iterable[Dict[str, Any]]) -> None:
+    """Make memory items behave like a real delayed-recall task.
+
+    Older authored items placed the stimulus directly in the prompt. That is
+    not a memory task: it gives the answer away and makes the UI wording
+    awkward. Keep the answer server-side, expose only a temporary stimulus
+    through the allow-listed student payload, and let the client render the
+    study/hide/recall protocol.
+    """
+    for item in items:
+        item["type"] = "memory"
+        item["render_type"] = "memory"
+        # Factory-generated candidates already carry a safe, separate
+        # stimulus. This also makes the second pass over QUESTION_BANK
+        # idempotent and preserves their distinct, human-readable prompts.
+        if item.get("memory_stimulus") is not None:
+            continue
+        prompt = str(item.get("prompt", ""))
+        item["memory_protocol"] = {
+            "study_ms": 3000,
+            "response_timeout_ms": 30000,
+            "replay_allowed": False,
+            "score_method": "exact_option",
+        }
+        item["memory_stimulus"] = None
+        if prompt.startswith("Remember "):
+            match = re.match(r"Remember (.+?)\. (.+)$", prompt)
+            if match:
+                stimulus, task = match.groups()
+                stimulus = re.sub(r"^(the order|the sequence)\s+", "", stimulus, flags=re.IGNORECASE)
+                item["memory_stimulus"] = stimulus.split(" — ")
+                item["prompt"] = f"Study the sequence for three seconds. It will disappear. {task}"
+        elif prompt.startswith("Study this "):
+            # Generated candidates intentionally carried the answer in the
+            # prompt. The answer is retained only in the protected key.
+            item["memory_stimulus"] = str(item.get("answer", "")).split(" — ")
+            item["prompt"] = "Study the sequence for three seconds. It will disappear. Which option matches it exactly?"
+        elif prompt.startswith(("Start ", "Begin ", "Keep ", "Hold ")):
+            # Updating trials present an operation string, then ask for the
+            # resulting value after it has disappeared.
+            item["memory_stimulus"] = [prompt.rstrip("?")]
+            item["prompt"] = "Study the calculation for three seconds. It will disappear. What result do the steps produce?"
+
+
+_prepare_memory_items(MEMORY)
+
 SPEED: List[Dict[str, Any]] = [
     _item("SPD-001", "processing_speed", "visual_search", "Find the only exact match for the target pair ◇◆.", ["A. ◆◇", "B. ◇◆", "C. ◇◇", "D. ◆◆"], "B. ◇◆", "Only B preserves both symbol identity and order.", "speed"),
     _item("SPD-002", "processing_speed", "symbol_match", "Which row contains two identical symbols next to each other?", ["A. △ ○ □", "B. ○ □ △", "C. □ □ ◇", "D. ◇ △ ○"], "C. □ □ ◇", "The square pair appears only in C.", "speed"),
@@ -207,6 +255,7 @@ TARGET_ITEMS_PER_DOMAIN = 120
 REVIEWED_ITEMS_PER_DOMAIN = 100
 
 QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED + generated_items()
+_prepare_memory_items(item for item in QUESTION_BANK if item.get("domain") == "working_memory")
 
 
 def bank_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, int]:
