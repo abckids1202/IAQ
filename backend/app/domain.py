@@ -6,7 +6,7 @@ same functions can be called from a transaction after validating a response.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Mapping
+from typing import Dict, Iterable, List, Mapping, Optional
 
 DOMAINS = (
     "abstract_reasoning",
@@ -26,7 +26,12 @@ class ScoreResult:
     confidence: str
     quality_warnings: List[str]
     domain_metrics: Dict[str, Dict[str, object]] = field(default_factory=dict)
-    score_version: str = "SCORING-V1"
+    # This is an observed within-profile signal, not a normed IQ score. Keep
+    # the score kind explicit so a future normed model cannot be confused with
+    # the pilot scorer in the API or report layer.
+    score_version: str = "IAQ-PROVISIONAL-ACCURACY-1"
+    score_kind: str = "provisional_domain_signal"
+    norm_version: Optional[str] = None
 
 
 def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mapping[str, str], item_keys: Mapping[str, str]) -> ScoreResult:
@@ -54,7 +59,10 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     # become a flattering or punitive ability-looking number by accident.
     minimum_items_for_interpretation = 4
     domain_scores = {
-        domain: round(50 + ((correct / total) * 45)) if total >= minimum_items_for_interpretation else None
+        # Until item parameters and age norms exist, report observed accuracy
+        # directly. A synthetic baseline (for example, 50 at zero correct)
+        # would make the result look more scientific than the evidence allows.
+        domain: round((correct / total) * 100) if total >= minimum_items_for_interpretation else None
         for domain, (correct, total) in totals.items()
     }
     answered = sum(pair[1] for pair in totals.values())
@@ -81,7 +89,16 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
             "interpretation_eligible": total >= minimum_items_for_interpretation,
             "evidence_note": None if total >= minimum_items_for_interpretation else f"Only {total} scored item(s) completed in this area.",
         }
-    return ScoreResult(domain_scores, composite, confidence, warnings, domain_metrics)
+    return ScoreResult(
+        domain_scores,
+        composite,
+        confidence,
+        warnings,
+        domain_metrics,
+        score_version="IAQ-PROVISIONAL-ACCURACY-1",
+        score_kind="provisional_domain_signal",
+        norm_version=None,
+    )
 
 
 def score_riasec(responses: Mapping[str, int]) -> Dict[str, object]:

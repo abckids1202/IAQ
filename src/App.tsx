@@ -3,9 +3,10 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { alternatives, domainMeta, domains, majors, questions, recommendations } from './data'
-import { captureIdentity, finishAssessment, getAIStatus, getAssessmentResult, getDatasetAsset, getDatasetAudit, getDatasetPreview, getDatasetSummary, getInterestResult, requestAIDirections, requestAIInterpretation, requestReportDelivery, resumeRandomizedAssessment, reviewDatasetCandidate, saveAndGetNext, startRandomizedAssessment, submitFeedback, type AIDirectionContext, type AIInterpretation, type DatasetAudit, type DatasetCandidate, type DatasetSummary, type InterestResult } from './api'
+import { captureIdentity, finishAssessment, getAIStatus, getAssessmentResult, getDatasetAsset, getDatasetAudit, getDatasetPreview, getDatasetSummary, getInterestResult, requestAIDirections, requestAIInterpretation, requestReportDelivery, resumeRandomizedAssessment, reviewDatasetCandidate, saveAndGetNext, startAssessmentWithOptions, startRandomizedAssessment, submitFeedback, type AIDirectionContext, type AIInterpretation, type DatasetAudit, type DatasetCandidate, type DatasetSummary, type InterestResult, type PracticeCompletion } from './api'
 import { AccountSettings, AuthCallback, AuthLogin, Billing, Checkout, PaymentPage, Pricing } from './access'
 import { CertificateVerification, Certificates, InterestAssessment, LegalPage, PublicInfoPage } from './product'
+import { LanguageToggle, useI18n } from './i18n'
 import type { AssessmentResult, Domain, Major, Profile, Question, Role } from './types'
 
 const emptyScores = Object.fromEntries(domains.map((domain) => [domain, 0])) as Record<Domain, number>
@@ -183,8 +184,8 @@ function App() {
     <Route path="/interests" element={<StudentAppShell profile={profile}><InterestAssessment resultId={profile.lastResult?.id} /></StudentAppShell>} />
     <Route path="/certificates" element={<StudentAppShell profile={profile}><Certificates resultId={profile.lastResult?.id} /></StudentAppShell>} />
     <Route path="/verify" element={<StudentAppShell profile={profile}><CertificateVerification /></StudentAppShell>} />
-    <Route path="/tracker" element={<StudentAppShell profile={profile}><Tracker savedMajors={savedMajors} /></StudentAppShell>} />
-    <Route path="/results" element={<StudentAppShell profile={profile}><Results profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
+    <Route path="/tracker" element={<StudentAppShell profile={profile}><DataTracker profile={profile} savedMajors={savedMajors} /></StudentAppShell>} />
+    <Route path="/results" element={<StudentAppShell profile={profile}><><Results profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /><AccessibleResultTable result={profile.lastResult} /></></StudentAppShell>} />
     <Route path="/school" element={<CounselorAppShell><School /></CounselorAppShell>} />
     <Route path="/admin" element={<AdminAppShell><Admin /></AdminAppShell>} />
     <Route path="/methodology" element={<StudentAppShell profile={profile}><Methodology /></StudentAppShell>} />
@@ -221,13 +222,17 @@ function ProfileMenu({ profile, label }: { profile?: Profile; label: string }) {
 }
 
 function StudentAppHeader({ profile }: { profile: Profile }) {
+  const { t } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
-  return <header className="student-header"><div className="student-header-inner"><WorkspaceSwitcher active="Student Profile" /><button className="student-menu-toggle" onClick={() => setMenuOpen((value) => !value)} aria-expanded={menuOpen} aria-controls="student-navigation">Menu</button><nav id="student-navigation" className={`student-nav ${menuOpen ? 'is-open' : ''}`} aria-label="Student navigation">{studentNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMenuOpen(false)} className={({ isActive }) => `student-nav-link ${isActive ? 'active' : ''}`}>{item.label}</NavLink>)}</nav><div className="student-utilities"><GlobalSearch compact /><ThemeToggle /><ProfileMenu profile={profile} label="Student profile" /></div></div></header>
+  const labelFor = (to: string) => to === '/' ? t('navOverview') : to === '/assess' ? t('navTest') : to === '/results' ? t('navResults') : to === '/compass' ? t('navDirections') : t('navProgress')
+  return <header className="student-header"><div className="student-header-inner"><WorkspaceSwitcher active="Student Profile" /><button className="student-menu-toggle" onClick={() => setMenuOpen((value) => !value)} aria-expanded={menuOpen} aria-controls="student-navigation">Menu</button><nav id="student-navigation" className={`student-nav ${menuOpen ? 'is-open' : ''}`} aria-label="Student navigation">{studentNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMenuOpen(false)} className={({ isActive }) => `student-nav-link ${isActive ? 'active' : ''}`}>{labelFor(item.to)}</NavLink>)}</nav><div className="student-utilities"><GlobalSearch compact /><LanguageToggle /><ThemeToggle /><ProfileMenu profile={profile} label="Student profile" /></div></div></header>
 }
 
 function MobileStudentNavigation() {
+  const { t } = useI18n()
   const mobileNav = [studentNav[0], studentNav[1], studentNav[3], studentNav[4]]
-  return <nav className="mobile-student-nav" aria-label="Mobile student navigation">{mobileNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `mobile-student-link ${isActive ? 'active' : ''}`}><span>{item.icon}</span>{item.label === 'Take a test' ? 'Test' : item.label === 'Explore directions' ? 'Explore' : item.label === 'Your progress' ? 'Progress' : 'Home'}</NavLink>)}</nav>
+  const labelFor = (to: string) => to === '/' ? t('navOverview') : to === '/assess' ? t('navTest') : to === '/compass' ? t('navDirections') : t('navProgress')
+  return <nav className="mobile-student-nav" aria-label="Mobile student navigation">{mobileNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `mobile-student-link ${isActive ? 'active' : ''}`}><span>{item.icon}</span>{labelFor(item.to)}</NavLink>)}</nav>
 }
 
 function StudentAppShell({ children, profile }: { children: React.ReactNode; profile: Profile }) {
@@ -257,6 +262,7 @@ function AdminAppShell({ children }: { children: React.ReactNode }) {
 }
 
 function PublicNavbar() {
+  const { t } = useI18n()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   useEffect(() => {
@@ -264,12 +270,13 @@ function PublicNavbar() {
     window.addEventListener('scroll', update, { passive: true })
     return () => window.removeEventListener('scroll', update)
   }, [])
-  const links = [{ to: '/welcome#how', label: 'How it works' }, { to: '/assess', label: 'Assessments' }, { to: '/compass', label: 'Explore directions' }, { to: '/welcome#schools', label: 'For schools' }, { to: '/methodology', label: 'Methodology' }]
-  return <header className={`public-navbar ${scrolled ? 'scrolled' : ''}`}><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><GlobalSearch compact /><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/auth/login" className="public-sign-in">Sign in</Link><ThemeToggle /><Link to="/assess" className="button primary magnetic">Take a test <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}<Link to="/auth/login" onClick={() => setMobileOpen(false)}>Sign in</Link><GlobalSearch /></nav>}</header>
+  const links = [{ to: '/welcome#how', label: t('publicHow') }, { to: '/assess', label: t('publicAssessments') }, { to: '/compass', label: t('publicDirections') }, { to: '/welcome#schools', label: t('publicSchools') }, { to: '/methodology', label: t('publicMethodology') }]
+  return <header className={`public-navbar ${scrolled ? 'scrolled' : ''}`}><div className="public-navbar-inner"><Brand to="/welcome" /><nav aria-label="Public navigation">{links.map((link) => <Link key={link.label} to={link.to}>{link.label}</Link>)}</nav><GlobalSearch compact /><LanguageToggle /><button className="public-menu-toggle" onClick={() => setMobileOpen((value) => !value)} aria-expanded={mobileOpen}>Menu</button><div className="public-actions"><Link to="/auth/login" className="public-sign-in">{t('signIn')}</Link><ThemeToggle /><Link to="/assess" className="button primary magnetic">{t('takeTest')} <span>→</span></Link></div></div>{mobileOpen && <nav className="public-mobile-menu" aria-label="Mobile public navigation">{links.map((link) => <Link key={link.label} to={link.to} onClick={() => setMobileOpen(false)}>{link.label}</Link>)}<Link to="/auth/login" onClick={() => setMobileOpen(false)}>{t('signIn')}</Link><LanguageToggle /><GlobalSearch /></nav>}</header>
 }
 
 function PublicSite() {
-  return <div className="public-site"><PublicNavbar /><main className="public-main"><section className="public-hero-grid"><div className="public-hero-copy"><div className="public-kicker">A clearer way to start thinking about what comes next</div><h1>See how you think.<br /><em>Then choose what to try.</em></h1><p>IAQ is a timed cognitive assessment for students who want useful evidence before exploring subjects, majors, and future directions.</p><div className="public-actions-large"><Link to="/assess" className="button primary">Start your assessment <span>→</span></Link><Link to="/methodology" className="text-button">How it works ↗</Link></div></div><aside className="public-hero-proof"><span className="eyebrow">The first release</span><strong>56</strong><span>questions across seven thinking areas</span><div className="public-proof-rule" /><div className="public-proof-meta"><span>35 min</span><span>private report</span><span>within-profile only</span></div></aside></section><section className="public-flow" id="how"><div className="public-flow-intro"><span className="eyebrow">A simple order</span><h2>Test first. Results next.</h2><p>Directions come after the evidence, so the next step has something real to build on.</p></div><div className="public-flow-steps"><article><b>01</b><h3>Take a test</h3><p>Answer 56 medium-to-hard questions in one focused, timed session.</p></article><article><b>02</b><h3>Read your report</h3><p>See seven domain scores, your average line, accuracy, and timing context.</p></article><article id="schools"><b>03</b><h3>Explore directions</h3><p>Use your profile and interests to choose small, practical things to try next.</p></article></div></section><section className="public-evidence"><div><span className="eyebrow">Built for honest progress</span><h2>One score is never the whole story.</h2></div><p>IAQ keeps results private and provisional. It is designed to support reflection and better conversations—not diagnosis, ranking, or a fixed label.</p><Link to="/methodology" className="text-button">Read the methodology ↗</Link></section></main></div>
+  const { t } = useI18n()
+  return <div className="public-site"><PublicNavbar /><main className="public-main"><section className="public-hero-grid"><div className="public-hero-copy"><div className="public-kicker">Cara yang lebih jelas untuk mulai memikirkan langkah berikutnya</div><h1>{t('seeHowYouThink')}<br /><em>Then choose what to try.</em></h1><p>IAQ adalah asesmen kognitif berwaktu untuk pelajar yang ingin memiliki bukti sebelum menjelajahi pelajaran, jurusan, dan arah masa depan.</p><div className="public-actions-large"><Link to="/assess" className="button primary">{t('startTest')} <span>→</span></Link><Link to="/methodology" className="text-button">{t('publicHow')} ↗</Link></div></div><aside className="public-hero-proof"><span className="eyebrow">Rilis pertama</span><strong>56</strong><span>soal dalam tujuh area berpikir</span><div className="public-proof-rule" /><div className="public-proof-meta"><span>35 menit</span><span>laporan pribadi</span><span>hanya dalam profil</span></div></aside></section><section className="public-flow" id="how"><div className="public-flow-intro"><span className="eyebrow">Urutan sederhana</span><h2>Test first. Results next.</h2><p>Arah datang setelah bukti, sehingga langkah berikutnya punya dasar yang nyata.</p></div><div className="public-flow-steps"><article><b>01</b><h3>{t('navTest')}</h3><p>Jawab 56 soal tingkat menengah hingga sulit dalam satu sesi terarah.</p></article><article><b>02</b><h3>{t('navResults')}</h3><p>Lihat tujuh skor area, garis rata-rata, akurasi, dan konteks waktu.</p></article><article id="schools"><b>03</b><h3>{t('navDirections')}</h3><p>Gunakan profil dan minat Anda untuk memilih langkah kecil yang bisa dicoba.</p></article></div></section><section className="public-evidence"><div><span className="eyebrow">Dibuat untuk kemajuan yang jujur</span><h2>Satu skor bukan seluruh cerita.</h2></div><p>IAQ menjaga hasil tetap pribadi dan sementara. Gunakan untuk refleksi dan percakapan, bukan diagnosis atau peringkat.</p><Link to="/methodology" className="text-button">{t('publicMethodology')} ↗</Link></section></main></div>
 }
 
 function PageIntro({ eyebrow, title, body, action }: { eyebrow: string; title: React.ReactNode; body?: string; action?: React.ReactNode }) {
@@ -290,13 +297,14 @@ function LegacyHome({ profile, savedMajors }: { profile: Profile; savedMajors: s
 }
 
 function Home({ profile }: { profile: Profile; savedMajors: string[] }) {
+  const { t } = useI18n()
   const hasResult = Boolean(profile.lastResult)
   const composite = profile.composite ?? null
   const ranked = [...domains].sort((a, b) => (profile.scores[b] ?? -1) - (profile.scores[a] ?? -1))
   return <div className="page home-page">
-    <section className="compact-hero"><div><div className="eyebrow">IAQ / your starting point</div><h1>{hasResult ? <>Your result is ready.<br /><em>See what stands out.</em></> : <>Start with one test.<br /><em>See how you think.</em></>}</h1><p>{hasResult ? 'Read your private profile first. Explore directions only after you understand the evidence.' : 'A 35-minute assessment across seven thinking areas, followed by a clear visual report.'}</p></div><Link to={hasResult ? '/results' : '/assess'} className="button primary">{hasResult ? 'See my results' : 'Start test'} <span>→</span></Link></section>
-    <div className="notice-bar compact-notice"><span className="notice-icon">i</span><span><strong>Private and provisional.</strong> This is an educational profile, not an official IQ score or diagnosis.</span><Link to="/methodology">How it works ↗</Link></div>
-    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? 'Your results / seven areas' : 'Your result / seven areas'}</div><h2>{hasResult ? 'A clear picture of your thinking' : 'Your report will appear here'}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ profile score' : 'Complete the test'}</span><strong>{hasResult && composite !== null ? <AnimatedNumber value={composite} /> : '—'}{hasResult && composite !== null && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : 'Seven domain scores, accuracy, and timing context.'}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? (profile.scores[domain] ?? 0) : 0}%` }} /></i><strong>{hasResult ? (profile.scores[domain] ?? '—') : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : '56 questions · 35 minutes · randomized'}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">The first step</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : 'Start the test.'}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>Test first. Results next. Directions after.</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>Take a test</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>See your results</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>Explore directions</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
+    <section className="compact-hero"><div><div className="eyebrow">IAQ / titik awal Anda</div><h1>{hasResult ? <>{t('resultsReady')}<br /><em>{t('seeWhatStandsOut')}</em></> : <>{t('startWithOneTest')}<br /><em>{t('seeHowYouThink')}</em></>}</h1><p>{hasResult ? 'Baca profil pribadi Anda terlebih dahulu. Jelajahi arah setelah memahami buktinya.' : t('assessmentDescription')}</p></div><Link to={hasResult ? '/results' : '/assess'} className="button primary">{hasResult ? t('seeResults') : t('startTest')} <span>→</span></Link></section>
+    <div className="notice-bar compact-notice"><span className="notice-icon">i</span><span><strong>{t('privateProvisional')}</strong> {t('notOfficial')}</span><Link to="/methodology">{t('publicHow')} ↗</Link></div>
+    <div className="dashboard-grid home-grid"><section className="panel home-result-preview span-8"><div className="panel-top"><div><div className="eyebrow">{hasResult ? `${t('navResults')} / seven areas` : 'Your result / seven areas'}</div><h2>{hasResult ? t('clearPicture') : t('yourResultAppears')}</h2></div><span className="mono-label">{hasResult ? profile.lastAssessment : 'NOT STARTED'}</span></div><div className="home-result-body"><div className="home-score"><span>{hasResult ? 'IAQ Cognitive Profile' : t('completeTest')}</span><strong>{hasResult && composite !== null ? <AnimatedNumber value={composite} /> : '—'}{hasResult && composite !== null && <small>/100</small>}</strong><p>{hasResult ? `${profile.confidence || 'moderate'} confidence · within your profile` : t('sevenScores')}</p></div><div className="home-bars" aria-label="Thinking profile preview">{ranked.map((domain) => <div className="home-bar-row" key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${hasResult ? (profile.scores[domain] ?? 0) : 0}%` }} /></i><strong>{hasResult ? (profile.scores[domain] ?? '—') : '—'}</strong></div>)}</div></div><div className="panel-footer"><span>{hasResult ? `Strongest today: ${profile.strengths.join(' + ')}` : t('testFacts')}</span><Link to={hasResult ? '/results' : '/assess'}>{hasResult ? 'Read the full report ↗' : 'See the test details ↗'}</Link></div></section><aside className="panel home-start-panel span-4"><div className="eyebrow">{t('firstStep')}</div><div className="home-step-number">01</div><h2>{hasResult ? 'Now add context.' : t('readyToStart')}</h2><p>{hasResult ? 'Interests and real experiences are more useful after your result gives you a starting point.' : 'Answer carefully. The test chooses a balanced set from the question bank and submits when time runs out.'}</p><Link className="button secondary full" to={hasResult ? '/compass' : '/assess'}>{hasResult ? t('exploreNext') : t('startTest')} <span>→</span></Link></aside><section className="home-sequence span-12"><div><span className="eyebrow">A simple order</span><h2>{t('testFirst')}</h2></div><div className="sequence-steps"><Link to="/assess"><b>01</b><span>{t('navTest')}</span><small>35 minutes / 56 questions</small></Link><Link to="/results"><b>02</b><span>{t('resultsNext')}</span><small>Seven visual domain scores</small></Link><Link to="/compass"><b>03</b><span>{t('exploreNext')}</span><small>Use evidence, interests, and curiosity</small></Link></div></section></div>
   </div>
 }
 
@@ -340,7 +348,17 @@ function DomainExplorer() {
 }
 
 function AssessLanding() {
-  return <div className="page assess-page"><section className="assessment-prep-intro"><div><div className="eyebrow">IAQ / timed assessment</div><h1>Take a test.<br /><em>See how you think.</em></h1><p>One focused session. A clear visual report as soon as you finish.</p></div><Link to="/methodology" className="text-button prep-method-link">How the assessment works ↗</Link></section><div className="assessment-prep-grid"><DomainExplorer /><aside className="assessment-session-summary panel"><span className="eyebrow">Your session</span><h2>Ready when you are.</h2><p className="summary-lede">Find a quiet place and give yourself enough time to think carefully.</p><div className="session-facts"><div><strong>35</strong><span>minutes</span></div><div><strong>56</strong><span>questions</span></div><div><strong>8</strong><span>per area</span></div></div><div className="prep-guidance"><strong>Before you start</strong><p>The clock keeps running after a refresh or if you leave. Your place is saved, but time is not extended.</p><p>You can skip an item and return to it before submitting.</p></div><Link to="/assess/session" className="button primary full">Start test <span>→</span></Link><span className="session-footnote">Your result is private, provisional, and for within-profile reflection.</span></aside><section className="report-preview panel"><div><span className="eyebrow">After the test</span><h2>Your report puts the evidence first.</h2><p>See all seven domain scores sorted against your own average, with accuracy and timing context for each area.</p></div><div className="report-preview-bars" aria-label="Illustrative report bar chart"><span className="report-average-label">your average</span>{domains.map((domain, index) => <div key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${[76, 62, 69, 57, 83, 65, 48][index]}%` }} /></i></div>)}</div><span className="report-preview-note">Illustrative shape only — no score is shown before you complete the assessment.</span></section></div></div>
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const [ageBand, setAgeBand] = useState(() => localStorage.getItem('iaq-age-band') || '')
+  const [startError, setStartError] = useState('')
+  const start = () => {
+    if (!ageBand) { setStartError(t('ageRequired')); return }
+    localStorage.setItem('iaq-age-band', ageBand)
+    const mode = ageBand === '15-17' ? 'practice' : 'complete'
+    navigate(`/assess/session?mode=${mode}&age_band=${ageBand}&language=en`)
+  }
+  return <div className="page assess-page"><section className="assessment-prep-intro"><div><div className="eyebrow">IAQ / timed assessment</div><h1>{t('navTest')}.<br /><em>{t('seeHowYouThink')}</em></h1><p>One focused session. A clear visual report as soon as you finish.</p></div><Link to="/methodology" className="text-button prep-method-link">{t('publicHow')} ↗</Link></section><div className="assessment-prep-grid"><DomainExplorer /><aside className="assessment-session-summary panel"><span className="eyebrow">Your session</span><h2>Ready when you are.</h2><p className="summary-lede">Find a quiet place and give yourself enough time to think carefully.</p><div className="session-facts"><div><strong>35</strong><span>minutes</span></div><div><strong>56</strong><span>questions</span></div><div><strong>8</strong><span>per area</span></div></div><div className="prep-guidance"><strong>{t('chooseAge')}</strong><label className="age-choice"><span>Age group</span><select value={ageBand} onChange={(event) => { setAgeBand(event.target.value); setStartError('') }}><option value="">Select one</option><option value="18-22">{t('adultPilot')}</option><option value="15-17">{t('minorPractice')}</option></select></label><p className="field-note">{t('englishAssessment')}. {t('indonesianBankPending')}</p>{ageBand === '15-17' && <p className="field-note">{t('practiceOnly')}</p>}<p>The clock keeps running after a refresh or if you leave. Your place is saved, but time is not extended.</p></div><button type="button" onClick={start} className="button primary full">{ageBand === '15-17' ? 'Start practice' : t('startTest')} <span>→</span></button>{startError && <span className="form-status" role="alert">{startError}</span>}<span className="session-footnote">Your result is private, provisional, and for within-profile reflection.</span></aside><section className="report-preview panel"><div><span className="eyebrow">After the test</span><h2>Your report puts the evidence first.</h2><p>See all seven domain scores sorted against your own average, with accuracy and timing context for each area.</p></div><div className="report-preview-bars" aria-label="Illustrative report bar chart"><span className="report-average-label">your average</span>{domains.map((domain, index) => <div key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${[76, 62, 69, 57, 83, 65, 48][index]}%` }} /></i></div>)}</div><span className="report-preview-note">Illustrative shape only — no score is shown before you complete the assessment.</span></section></div></div>
 }
 
 function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, number>) => void }) {
@@ -381,11 +399,12 @@ function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, 
       setSubmitting(true)
       setApiError('')
       try {
-        const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1, 10000)
+        const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered, 10000)
         setAnswers((current) => ({ ...current, [question.id]: selected }))
         if (nextQuestion) setApiQuestion(nextQuestion)
         else {
           const result = await finishAssessment(apiSession)
+          if ('practice' in result) throw new Error('Practice mode is not available in the legacy assessment.')
           onComplete(Object.fromEntries(Object.entries(result.domainScores).map(([domain, score]) => [domain, score ?? 0])) as Record<Domain, number>)
           navigate('/results')
         }
@@ -482,6 +501,8 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [apiError, setApiError] = useState('')
+  const [practiceMode, setPracticeMode] = useState(false)
+  const [practiceComplete, setPracticeComplete] = useState<PracticeCompletion | null>(null)
 
   const begin = async () => {
     setLoading(true)
@@ -489,6 +510,10 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     try {
       const savedSessionId = window.sessionStorage.getItem(ASSESSMENT_SESSION_KEY)
       let started
+      const params = new URLSearchParams(window.location.search)
+      const requestedMode = params.get('mode') === 'practice' ? 'practice' : 'complete'
+      const ageBand = (params.get('age_band') || localStorage.getItem('iaq-age-band') || 'adult') as '15-17' | '18-22' | 'adult' | 'unknown'
+      const language = (params.get('language') === 'id' ? 'id' : 'en') as 'en' | 'id'
       if (savedSessionId) {
         try {
           started = await resumeRandomizedAssessment(savedSessionId)
@@ -499,7 +524,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
           started = await startRandomizedAssessment()
         }
       } else {
-        started = await startRandomizedAssessment()
+        started = await startAssessmentWithOptions(requestedMode, ageBand, language)
       }
       window.sessionStorage.setItem(ASSESSMENT_SESSION_KEY, started.sessionId)
       setApiSession(started.sessionId)
@@ -508,6 +533,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
       setTimeLeft(Math.max(0, Math.ceil((new Date(started.deadlineAt).getTime() - Date.now()) / 1000)))
       setTotalQuestions(started.questionCount)
       setAnsweredBaseline(started.answeredCount)
+      setPracticeMode(Boolean(started.practice))
       setQuestionStartedAt(Date.now())
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'We could not prepare the test.')
@@ -523,6 +549,12 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     try {
       const result = await finishAssessment(apiSession)
       window.sessionStorage.removeItem(ASSESSMENT_SESSION_KEY)
+      if ('practice' in result && result.practice) {
+        setPracticeComplete(result)
+        setSubmitting(false)
+        return
+      }
+      if (!('domainScores' in result)) return
       onComplete(result)
       navigate('/results')
     } catch (error) {
@@ -552,7 +584,7 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     setSubmitting(true)
     setApiError('')
     try {
-      const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered + 1, Math.max(0, Date.now() - questionStartedAt))
+      const nextQuestion = await saveAndGetNext(apiSession, question, selected, answered, Math.max(0, Date.now() - questionStartedAt))
       setAnswers((current) => ({ ...current, [question.id]: selected }))
       if (nextQuestion) {
         setQuestion(nextQuestion)
@@ -567,7 +599,8 @@ function Assessment({ onComplete }: { onComplete: (result: AssessmentResult) => 
     }
   }
 
-  if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>We are choosing eight questions from each thinking area.</p></div></main></div>
+  if (practiceComplete) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card practice-complete"><div className="eyebrow">Practice mode</div><h1>{practiceComplete.practice ? 'Practice complete.' : 'Session complete.'}</h1><p>{practiceComplete.message}</p><Link className="button primary" to="/assess">Back to assessment details <span>→</span></Link></div></main></div>
+  if (loading) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card"><div className="eyebrow">Preparing your test</div><h1>Picking a fresh set of questions…</h1><p>{practiceMode ? 'We are preparing a short practice set.' : 'We are choosing eight questions from each thinking area.'}</p></div></main></div>
   if (!question) return <div className="assessment-screen"><main className="assessment-main"><div className="loading-card error-card"><div className="eyebrow">The test is not ready</div><h1>We could not start your test.</h1><p>{apiError || 'Start the IAQ API, then try again.'}</p><button className="button primary" onClick={() => { submissionStarted.current = false; void begin() }}>Try again <span>↻</span></button></div></main></div>
 
   const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0')
@@ -693,6 +726,21 @@ function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleM
     <section className="result-evidence-strip"><div><span className="eyebrow">Questions answered</span><strong>{result ? `${result.answeredCount} / ${result.questionCount}` : 'Demo view'}</strong><span>balanced across seven areas</span></div><div><span className="eyebrow">Time limit</span><strong>{result ? `${Math.ceil(result.durationSeconds / 60)} minutes` : '35 minutes'}</strong><span>the test is time-limited</span></div><div><span className="eyebrow">How to read this</span><strong>Compare the bars</strong><span>not yourself with other people</span></div></section>
     <AIInterpretationCard resultId={result.id} /><div className="result-grid result-secondary-grid"><section className="panel secondary-result-panel span-7"><div className="eyebrow">Next, when you are ready</div><h2>Explore what fits you.</h2><p>After your thinking profile, interests and real experiences can add useful context to possible directions. They do not change this result.</p><div className="secondary-actions"><Link className="button secondary" to="/interests">Tell us what you enjoy <span>→</span></Link><Link className="text-button" to="/compass">Explore directions ↗</Link></div></section><section className="panel timing-panel span-5"><div className="eyebrow">How timing affected this snapshot</div><h2>{result.quality?.status === 'acceptable' ? 'Your session looked steady.' : 'Keep timing in context.'}</h2><p>{result.quality?.warnings?.length ? `The session recorded ${result.quality.warnings.length} quality note${result.quality.warnings.length > 1 ? 's' : ''}. That does not silently change your score, but it is useful context for reading the bars.` : 'No timing warning was recorded. Faster is not automatically better; accuracy and concentration both matter.'}</p><div className="timing-note"><span className="notice-icon">i</span><span>{`Median response times are shown per domain. ${formatTime(metricFor(ranked[0])?.medianResponseTimeMs)}`}</span></div></section></div><ReportDeliveryCard resultId={result.id} />
   </div>
+}
+
+function AccessibleResultTable({ result }: { result?: AssessmentResult }) {
+  if (!result || result.fullAccess === false) return null
+  return <section className="panel accessible-data-table" aria-labelledby="accessible-results-title"><details><summary id="accessible-results-title">Read the profile as a table</summary><div className="table-scroll"><table><caption>Provisional IAQ Cognitive Profile domain results</caption><thead><tr><th scope="col">Domain</th><th scope="col">Signal</th><th scope="col">Correct</th><th scope="col">Answered</th><th scope="col">Accuracy</th><th scope="col">Median time</th></tr></thead><tbody>{domains.map((domain) => { const metric = result.domainMetrics[domain]; const signal = result.domainScores[domain]; return <tr key={domain}><th scope="row">{domain}</th><td>{signal === null || signal === undefined ? 'Not assessed' : `${signal} / 100`}</td><td>{metric?.correct ?? 0}</td><td>{metric?.answered ?? 0}</td><td>{metric?.accuracy === null || metric?.accuracy === undefined ? '—' : `${metric.accuracy}%`}</td><td>{metric?.medianResponseTimeMs ? `${(metric.medianResponseTimeMs / 1000).toFixed(1)} seconds` : 'Not recorded'}</td></tr> })}</tbody></table></div></details></section>
+}
+
+function hasAssessmentResult(profile: Profile): profile is Profile & { lastResult: AssessmentResult } {
+  return Boolean(profile.lastResult)
+}
+
+function DataTracker({ profile, savedMajors }: { profile: Profile; savedMajors: string[] }) {
+  const hasResult = hasAssessmentResult(profile)
+  const completed = profile.lastResult ? new Date(profile.lastResult.completedAt).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : null
+  return <div className="page tracker-page"><PageIntro eyebrow="Progress / evidence" title={<>Track what you try.<br /><em>Use real snapshots.</em></>} body="IAQ only shows activity that is actually saved to your profile. There are no placeholder projects or invented progress numbers." action={<Link className="button secondary" to={hasResult ? '/compass' : '/assess'}>{hasResult ? 'Explore directions' : 'Start test'} <span>→</span></Link>} />{!hasResult ? <section className="panel empty-report-panel"><div className="eyebrow">No saved assessment</div><h2>Your progress starts with one real result.</h2><p>Complete the assessment to create your first private snapshot. Interest and direction history will appear after you add those modules.</p><Link className="button primary" to="/assess">Start test <span>→</span></Link></section> : <><section className="tracker-strip"><div><span className="eyebrow">Saved assessments</span><strong>01</strong><span>real result</span></div><div><span className="eyebrow">Last completed</span><strong>{completed}</strong><span>{profile.lastResult.confidence} confidence</span></div><div><span className="eyebrow">Saved directions</span><strong>{String(savedMajors.length).padStart(2, '0')}</strong><span>to revisit</span></div><div className="tracker-note"><span className="notice-icon">i</span><span>IAQ does not treat repeated testing as progress. Add evidence through real projects and reflections as those features become available.</span></div></section><section className="panel timeline-panel"><div className="panel-top"><div><div className="eyebrow">Your saved activity</div><h2>One verified snapshot</h2></div><Link className="text-button" to="/results">Open results ↗</Link></div><div className="timeline"><div className="timeline-item"><div className="timeline-node cognitive" /><div className="timeline-date">{completed}</div><div className="timeline-content"><h3>Cognitive profile completed</h3><p>{profile.lastResult.answeredCount} of {profile.lastResult.questionCount} questions answered · {profile.lastResult.scoreKind === 'provisional_domain_signal' ? 'provisional domain signal' : profile.lastResult.scoreVersion}</p></div></div></div></section></>}</div>
 }
 
 function Tracker({ savedMajors }: { savedMajors: string[] }) {

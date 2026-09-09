@@ -55,7 +55,10 @@ def user_from_token(token: str) -> Dict[str, Any]:
         "display_name": str(user_metadata.get("display_name") or claims.get("email", "IAQ student")).strip(),
         "roles": roles or ["student"],
         "account_status": "active",
-        "age_band": str(user_metadata.get("age_band", "unknown")),
+        # Age safeguards must not trust user-editable user_metadata. A
+        # production provisioning flow should write the reviewed age band to
+        # server-managed app_metadata or the IAQ profiles table.
+        "age_band": str(app_metadata.get("age_band", "unknown")),
         "school_id": user_metadata.get("school_id"),
         "mfa_verified": bool(claims.get("aal") in {"aal2", "aal3"}),
         "provider": "supabase",

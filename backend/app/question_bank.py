@@ -279,5 +279,8 @@ def reviewed_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str
 
 
 def review_gate_ready(items: Iterable[Dict[str, Any]] = QUESTION_BANK, minimum_per_domain: int = REVIEWED_ITEMS_PER_DOMAIN) -> bool:
-    counts = reviewed_counts(items)
+    # Lifecycle labels alone are not evidence of two independent approvals.
+    # Import lazily to avoid the question-bank/review module import cycle.
+    from . import review
+    counts = review.review_counts(items)
     return len(counts) == 7 and all(value >= minimum_per_domain for value in counts.values())

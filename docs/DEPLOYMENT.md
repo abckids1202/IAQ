@@ -27,6 +27,7 @@ tests only.
 - Set `IAQ_ACCESS_STORE=postgres` only after the order, entitlement, guardian-consent, and review repositories are wired to the migration tables. The current local access repository remains memory-backed and `/ready` reports it as a production blocker.
 - Replace `development_demo` auth with verified JWTs and server-side role checks.
 - Configure `IAQ_AUTH_MODE=supabase`, `SUPABASE_URL` or `SUPABASE_JWKS_URL`, and server-managed roles in Supabase `app_metadata`. Never accept role claims from untrusted user metadata in a production provisioning flow.
+- Keep age safeguards server-owned: write the reviewed `age_band` to `app_metadata` or the IAQ profile service, and set `IAQ_REQUIRE_VERIFIED_AGE=true` before allowing scored adult sessions. User-editable Supabase `user_metadata` is not accepted for minor gating.
 - Restrict CORS to deployed origins and enforce TLS.
 - Set `IAQ_ALLOWED_ORIGINS` to the exact frontend origin; development localhost origins are not implicitly allowed in production.
 - Configure Midtrans production keys and enable `MIDTRANS_IS_PRODUCTION=true` plus `MIDTRANS_LIVE_ENABLED=true` only after merchant verification, refund rehearsal, privacy review, and signed-notification tests.

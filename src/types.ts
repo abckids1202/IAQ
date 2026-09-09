@@ -61,6 +61,8 @@ export type AssessmentResult = {
   sessionId: string
   assessmentVersion: string
   scoreVersion: string
+  scoreKind?: string
+  normVersion?: string | null
   composite: number | null
   domainScores: Record<Domain, number | null>
   domainMetrics: Record<Domain, DomainResult>

@@ -4,10 +4,10 @@ The cognitive baseline covers abstract reasoning, deductive logic, numerical rea
 
 The default complete form selects 8 items from each domain (56 questions total) without replacement, avoids duplicate item families where the bank permits it, then shuffles the combined order with a secure random source. The complete session has a 35-minute server-enforced deadline. A new session receives a new form; item IDs, answer keys, and explanations remain server-side.
 
-The `medium_hard` label is a content target, not an established psychometric result. Difficulty, discrimination, fairness, reliability, and norms require real pilot responses and review.
+The `medium_hard` label is a content target, not an established psychometric result. Difficulty, discrimination, fairness, reliability, and norms require real pilot responses and review. The current scorer reports an observed `provisional_domain_signal` from 0–100; it is not an IQ score and has no population interpretation.
 
 Each assessment version has an immutable item version, scoring model version, and (in future) a norm version. An item version cannot be edited after scored responses exist; a new version is created instead.
 
-Content lifecycle: `DRAFT → AI_GENERATED → AUTOMATICALLY_VERIFIED → HUMAN_REVIEWED → PILOT → CALIBRATED → ACTIVE → RETIRED`.
+Content lifecycle: `DRAFT → AUTO_VERIFIED → HUMAN_REVIEWED → PILOT → ACTIVE → RETIRED`.
 
 Synthetic data is labelled `SYNTHETIC`. Pilot responses are labelled `REAL_PILOT`. These datasets are never silently mixed.

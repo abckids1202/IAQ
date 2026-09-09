@@ -84,7 +84,12 @@ INTEREST_ITEMS = [
 
 class SessionCreate(BaseModel):
     assessment_version: str = "IAQ-COG-0.3"
-    mode: str = Field(default="complete", pattern="^(quick|complete)$")
+    mode: str = Field(default="complete", pattern="^(quick|complete|practice)$")
+    # The language is locked into the session. The current production bank is
+    # English-only; Indonesian sessions stay blocked until a separately
+    # authored and reviewed item version is available.
+    language: str = Field(default="en", pattern="^(en|id)$")
+    age_band: str = Field(default="adult", pattern="^(15-17|18-22|adult|unknown)$")
 
 
 class ResponseCreate(BaseModel):
@@ -259,33 +264,39 @@ def admin_item_payload(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def session_for(session_id: str) -> Optional[Dict[str, Any]]:
+    # Ephemeral practice sessions intentionally bypass the database even when
+    # the production assessment store is configured.
+    if session_id in SESSIONS:
+        return SESSIONS[session_id]
     if PERSISTENCE:
         return PERSISTENCE.get_session(session_id)
     return SESSIONS.get(session_id)
 
 
 def persist_session(session: Dict[str, Any], values: Dict[str, Any]) -> None:
-    if PERSISTENCE:
+    if session.get("ephemeral"):
+        session.update(values)
+    elif PERSISTENCE:
         PERSISTENCE.update_session(session["id"], values)
     else:
         session.update(values)
 
 
-def create_randomized_form(mode: str) -> List[str]:
+def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     """Create a balanced, no-repeat form from the reviewed question bank."""
-    if os.getenv("IAQ_ENV", "development").lower() == "production" and not PERSISTENCE:
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and not PERSISTENCE and mode != "practice":
         raise HTTPException(503, "Production assessments require PostgreSQL persistence")
-    if os.getenv("IAQ_ENV", "development").lower() == "production" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and mode != "practice" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
         raise HTTPException(503, "Production assessments require the reviewed-item release gate")
     per_domain = 8 if mode == "complete" else 2
-    eligible_items = [item for item in ITEMS.values() if item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"}]
+    eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"}]
     # The local development preview can still exercise the full assessment
     # contract while the generated reserve is awaiting human review. This
     # fallback is deliberately disabled whenever the pilot review gate is on.
     family_ready = all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS)
     if (not eligible_items or not family_ready) and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
-        eligible_items = [item for item in ITEMS.values() if item.get("status") in {"PILOT", "ACTIVE"}]
-    if os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true":
+        eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and item.get("status") in {"PILOT", "ACTIVE"}]
+    if os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true" and mode != "practice":
         eligible_items = [item for item in eligible_items if review.review_summary(item)["review_ready"]]
         if not review_gate_ready(eligible_items):
             raise HTTPException(503, "The question-bank review gate requires 100 eligible reviewed items per domain")
@@ -327,12 +338,19 @@ def runtime_readiness() -> Dict[str, Any]:
     auth_mode = os.getenv("IAQ_AUTH_MODE", "development").lower()
     payments_enabled = os.getenv("PAYMENTS_ENABLED", "true").lower() == "true"
     require_reviewed_items = os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true"
+    guardian_consent_required = os.getenv("GUARDIAN_CONSENT_REQUIRED", "true").lower() == "true"
     midtrans_live = os.getenv("MIDTRANS_IS_PRODUCTION", "false").lower() == "true" and os.getenv("MIDTRANS_LIVE_ENABLED", "false").lower() == "true"
     checks = {
         "database": bool(PERSISTENCE) if production or os.getenv("IAQ_REQUIRE_PERSISTENCE", "false").lower() == "true" else True,
         "commerce_persistence": bool(PERSISTENCE) and access.POSTGRES_ACCESS_STORE_READY and os.getenv("IAQ_ACCESS_STORE", "memory").lower() == "postgres" if production else True,
         "supabase_auth": auth_mode == "supabase" and bool(os.getenv("SUPABASE_URL") or os.getenv("SUPABASE_JWKS_URL")) if production else True,
-        "review_gate": review_gate_ready() if production or require_reviewed_items else True,
+        "verified_age_policy": os.getenv("IAQ_REQUIRE_VERIFIED_AGE", "false").lower() == "true" if production else True,
+        "guardian_consent_persistence": (not guardian_consent_required) or (bool(PERSISTENCE) and access.POSTGRES_ACCESS_STORE_READY) if production else True,
+        "review_persistence": bool(PERSISTENCE) and review.POSTGRES_REVIEW_STORE_READY if production else True,
+        # Use the same two-approval calculation as session creation. The old
+        # lifecycle-only check could report ready while no reviewer approvals
+        # existed.
+        "review_gate": (bool(review.review_counts(ITEMS.values())) and review_gate_ready()) if production or require_reviewed_items else True,
         "payments": (not payments_enabled) or (bool(os.getenv("MIDTRANS_SERVER_KEY")) and (not production or midtrans_live)) if production else True,
         "email": bool(os.getenv("RESEND_API_KEY")) if production else True,
         "app_base_url": bool(os.getenv("APP_BASE_URL")) if production else True,
@@ -606,27 +624,44 @@ def me(request: Request) -> Dict[str, Any]:
 
 @app.get("/assessments")
 def assessments() -> List[Dict[str, Any]]:
-    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8}]
+    available_languages = sorted({item.get("language", "en") for item in ITEMS.values() if item.get("language")})
+    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "official_iq_enabled": False}]
 
 
 def create_session(assessment_id: str, payload: SessionCreate, request: Request = None) -> Dict[str, Any]:
     if assessment_id != "iaq-cognitive":
         raise HTTPException(404, "Assessment version unavailable")
     user = current_user(request)
+    trusted_age_band = str(user.get("age_band", "unknown"))
+    # Local previews intentionally use the seeded demo identity. Until the
+    # Supabase profile-provisioning flow is enabled, let the local age gate
+    # exercise its self-reported branch without treating demo metadata as a
+    # production identity claim.
+    if os.getenv("IAQ_AUTH_MODE", "development").lower() == "development" and os.getenv("IAQ_REQUIRE_VERIFIED_AGE", "false").lower() != "true":
+        trusted_age_band = payload.age_band
+    if (payload.age_band == "15-17" or trusted_age_band == "15-17") and payload.mode != "practice":
+        raise HTTPException(403, "People aged 15–17 can use practice mode until guardian consent is available")
+    if payload.mode != "practice" and os.getenv("IAQ_REQUIRE_VERIFIED_AGE", "false").lower() == "true" and trusted_age_band not in {"18-22", "adult"}:
+        raise HTTPException(403, "A verified adult age band is required before a scored pilot session")
+    if payload.language == "id" and not any(item.get("language", "en") == "id" for item in ITEMS.values()):
+        raise HTTPException(503, "The Indonesian assessment version is not released yet; choose English for this pilot")
     access_code = "assessment.complete.start" if access.has_entitlement(user["id"], "assessment.complete.start") else "assessment.free.start"
-    if not access.has_entitlement(user["id"], access_code):
+    if payload.mode != "practice" and not access.has_entitlement(user["id"], access_code):
         raise HTTPException(402, "A free assessment start entitlement is required")
     session_id = str(uuid4())
     created_at = datetime.now(timezone.utc)
     deadline_at = created_at + timedelta(seconds=DURATION_SECONDS)
-    item_order = create_randomized_form(payload.mode)
-    access.consume_entitlement(user["id"], access_code, session_id)
-    session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": user["id"], "access_code": access_code, "consent_snapshot": {}}
-    if PERSISTENCE:
+    item_order = create_randomized_form(payload.mode, payload.language)
+    if payload.mode != "practice":
+        access.consume_entitlement(user["id"], access_code, session_id)
+    session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "language": payload.language, "age_band": payload.age_band, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": user["id"], "access_code": access_code if payload.mode != "practice" else None, "consent_snapshot": {}, "ephemeral": payload.mode == "practice", "data_origin": "PRACTICE" if payload.mode == "practice" else "REAL_PILOT"}
+    # Practice is intentionally held in process memory and never written to
+    # the assessment/results tables.
+    if PERSISTENCE and not session["ephemeral"]:
         PERSISTENCE.create_session(session)
     else:
         SESSIONS[session_id] = session
-    return {"id": session_id, "assessment_version": payload.assessment_version, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": 8 if payload.mode == "complete" else 2}
+    return {"id": session_id, "assessment_version": payload.assessment_version, "language": payload.language, "age_band": payload.age_band, "mode": payload.mode, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": 8 if payload.mode == "complete" else 2, "practice": session["ephemeral"]}
 
 
 @app.post("/assessments/{assessment_id}/sessions")
@@ -708,18 +743,21 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
         raise HTTPException(422, "Item is unavailable")
     if payload.item_id not in session["item_order"]:
         raise HTTPException(422, "Item is not part of this randomized form")
+    expected_order = session["item_order"].index(payload.item_id)
+    if payload.presented_order != expected_order:
+        raise HTTPException(422, "The item order does not match this assessment session")
     if payload.answer not in item["options"]:
         raise HTTPException(422, "Answer option is unavailable")
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
-    response = {"item_id": payload.item_id, "answer": payload.answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "REAL_PILOT"}
-    if PERSISTENCE:
+    response = {"item_id": payload.item_id, "answer": payload.answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
+    if PERSISTENCE and not session.get("ephemeral"):
         accepted = PERSISTENCE.insert_response(session_id, payload.item_id, payload.answer, payload.response_time_ms, payload.presented_order, idempotency_key)
         if not accepted:
             return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     else:
         session["responses"][payload.item_id] = response
-    answered_count = len(session["responses"]) if not PERSISTENCE else len(session["responses"]) + 1
+    answered_count = len(session["responses"]) if not PERSISTENCE or session.get("ephemeral") else len(session["responses"]) + 1
     return {"accepted": True, "duplicate": False, "item_id": payload.item_id, "answered_count": answered_count}
 
 
@@ -730,7 +768,7 @@ def record_event(session_id: str, payload: EventCreate, request: Request = None)
         raise HTTPException(404, "Session not found")
     require_session_owner(session, request)
     event = {"id": str(uuid4()), "session_id": session_id, "event_type": payload.event_type, "metadata": payload.metadata, "created_at": NOW()}
-    if PERSISTENCE:
+    if PERSISTENCE and not session.get("ephemeral"):
         PERSISTENCE.insert_event(session_id, event["id"], payload.event_type, payload.metadata)
     else:
         EVENTS.append(event)
@@ -812,6 +850,11 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
     if not session:
         raise HTTPException(404, "Session not found")
     require_session_owner(session, request)
+    if session.get("ephemeral"):
+        # Practice confirms that the interaction works but deliberately does
+        # not create a score, result record, entitlement, or saved response.
+        SESSIONS.pop(session_id, None)
+        return {"practice": True, "status": "complete", "answered_count": len(session.get("responses", {})), "question_count": len(session.get("item_order", [])), "message": "Practice complete. No score or answers were saved."}
     if session.get("result_id"):
         if PERSISTENCE:
             existing = PERSISTENCE.get_result(session["result_id"])
@@ -829,7 +872,7 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
         value = score.domain_scores[domain]
         relative = "insufficient evidence" if value is None or score.composite is None else "stronger than your average" if value > score.composite + 3 else "lower than your average" if value < score.composite - 3 else "close to your average"
         domain_metrics[domain] = {**metric, "score": value, "relative": relative}
-    RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "composite": score.composite, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
+    RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "score_kind": score.score_kind, "norm_version": score.norm_version, "composite": score.composite, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
     if PERSISTENCE:
         PERSISTENCE.store_result_and_complete_session(session_id, RESULTS[result_id])
     else:

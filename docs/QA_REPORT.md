@@ -1,6 +1,6 @@
 # IAQ QA report — local release
 
-Date: 2026-09-06
+Date: 2026-09-09
 
 ## Automated checks
 
@@ -9,7 +9,7 @@ Date: 2026-09-06
 | `npm.cmd run typecheck` | Passed |
 | `npm.cmd run build` | Passed; Vite reports a non-blocking large-chunk warning |
 | `npm.cmd test -- --run` | Passed: 2 tests |
-| `python -m pytest -q` from `backend` | Passed: 19 tests |
+| `python -m pytest -q` from `backend` | Passed: 34 tests |
 | `python -m compileall -q app` | Passed |
 | `git diff --check` | Passed |
 
@@ -24,8 +24,15 @@ Date: 2026-09-06
 
 ## Manual checks still required before real deployment
 
-- Run migrations 001–007 against an empty PostgreSQL database and repeat the seed.
+- Run migrations 001–011 against an empty PostgreSQL database and repeat the seed.
 - Exercise real Supabase/Google/Midtrans/transactional-email adapters in a staging environment.
 - Review `/`, `/assess`, `/assess/session`, `/results`, `/interests`, `/certificates`, and `/verify` at 1440px, 1024px, and 390px.
 - Test refresh/resume, timeout auto-submit, network loss, reduced motion, keyboard-only navigation, and screen-reader announcements.
 - Have assessment reviewers inspect every item family and have a psychometric reviewer approve pilot criteria.
+
+## Release boundary
+
+- `IAQ-PROVISIONAL-ACCURACY-1` reports observed accuracy and is not an official IQ score.
+- Indonesian assessment sessions are not released until a separately authored Indonesian bank exists.
+- Ages 15–17 are routed to an ephemeral, unscored practice session until guardian consent is implemented.
+- Production student scoring remains blocked until two independent human approvals exist for the live item versions.

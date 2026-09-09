@@ -65,10 +65,10 @@ class PostgresAssessmentStore:
                 )
                 cursor.execute(
                     """
-                    INSERT INTO test_sessions (id, user_id, external_user_id, assessment_version_id, status, data_origin, started_at, deadline_at, duration_seconds, consent_snapshot)
-                    VALUES (%s, %s, %s, %s, %s, 'REAL_PILOT', NULL, %s, %s, %s::jsonb)
+                    INSERT INTO test_sessions (id, user_id, external_user_id, assessment_version_id, status, data_origin, started_at, deadline_at, duration_seconds, consent_snapshot, language, age_band)
+                    VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s::jsonb, %s, %s)
                     """,
-                    (session["id"], database_user_id, external_user_id, assessment_version_id, session["status"], session["deadline_at"], session["duration_seconds"], json.dumps(session.get("consent_snapshot", {}))),
+                    (session["id"], database_user_id, external_user_id, assessment_version_id, session["status"], session.get("data_origin", "REAL_PILOT"), session["deadline_at"], session["duration_seconds"], json.dumps(session.get("consent_snapshot", {})), session.get("language", "en"), session.get("age_band", "unknown")),
                 )
                 for position, item_id in enumerate(session["item_order"]):
                     cursor.execute(
@@ -112,7 +112,8 @@ class PostgresAssessmentStore:
                 cursor.execute(
                     """
                     SELECT ts.id, ad.slug, av.version, ts.status, ts.created_at, ts.started_at,
-                           ts.deadline_at, ts.duration_seconds, ts.result_id, COALESCE(ts.external_user_id, ts.user_id::text)
+                           ts.deadline_at, ts.duration_seconds, ts.result_id, COALESCE(ts.external_user_id, ts.user_id::text),
+                           ts.language, ts.age_band, ts.data_origin
                     FROM test_sessions ts
                     JOIN assessment_versions av ON av.id = ts.assessment_version_id
                     JOIN assessment_definitions ad ON ad.id = av.definition_id
@@ -153,7 +154,7 @@ class PostgresAssessmentStore:
                     "started_at": row[5].isoformat() if row[5] else None,
                     "deadline_at": row[6].isoformat() if row[6] else None,
                     "duration_seconds": row[7], "result_id": str(row[8]) if row[8] else None,
-                    "responses": responses, "item_order": item_order, "user_id": row[9],
+                    "responses": responses, "item_order": item_order, "user_id": row[9], "language": row[10] or "en", "age_band": row[11] or "unknown", "data_origin": row[12] or "REAL_PILOT",
                 }
 
     def update_session(self, session_id: str, values: Dict[str, Any]) -> None:
@@ -197,11 +198,11 @@ class PostgresAssessmentStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO assessment_results (id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    INSERT INTO assessment_results (id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at, score_kind, norm_version)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
                     ON CONFLICT (session_id) DO NOTHING
                     """,
-                    (result["id"], session_id, result["composite"], result["confidence"], result["disclaimer"], result["question_count"], result["answered_count"], json.dumps(result["domain_metrics"]), json.dumps(result["quality"]), result["completed_at"]),
+                    (result["id"], session_id, result["composite"], result["confidence"], result["disclaimer"], result["question_count"], result["answered_count"], json.dumps(result["domain_metrics"]), json.dumps(result["quality"]), result["completed_at"], result.get("score_kind", "provisional_domain_signal"), result.get("norm_version")),
                 )
                 for domain, score in result["domain_scores"].items():
                     cursor.execute(
@@ -215,11 +216,11 @@ class PostgresAssessmentStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO assessment_results (id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    INSERT INTO assessment_results (id, session_id, composite, confidence, disclaimer, question_count, answered_count, domain_metrics, quality, completed_at, score_kind, norm_version)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
                     ON CONFLICT (session_id) DO NOTHING
                     """,
-                    (result["id"], session_id, result["composite"], result["confidence"], result["disclaimer"], result["question_count"], result["answered_count"], json.dumps(result["domain_metrics"]), json.dumps(result["quality"]), result["completed_at"]),
+                    (result["id"], session_id, result["composite"], result["confidence"], result["disclaimer"], result["question_count"], result["answered_count"], json.dumps(result["domain_metrics"]), json.dumps(result["quality"]), result["completed_at"], result.get("score_kind", "provisional_domain_signal"), result.get("norm_version")),
                 )
                 for domain, score in result["domain_scores"].items():
                     cursor.execute(
@@ -237,7 +238,8 @@ class PostgresAssessmentStore:
                 cursor.execute("""
                     SELECT ar.id, ar.session_id, ar.composite, ar.confidence, ar.disclaimer,
                            ar.question_count, ar.answered_count, ar.domain_metrics, ar.quality,
-                           ar.completed_at, COALESCE(ts.external_user_id, ts.user_id::text), ar.access_tier
+                           ar.completed_at, COALESCE(ts.external_user_id, ts.user_id::text), ar.access_tier,
+                           ar.score_kind, ar.norm_version
                     FROM assessment_results ar
                     JOIN test_sessions ts ON ts.id = ar.session_id
                     WHERE ar.id = %s
@@ -252,7 +254,7 @@ class PostgresAssessmentStore:
                 metrics = row[7] if isinstance(row[7], dict) else json.loads(row[7])
                 quality = row[8] if isinstance(row[8], dict) else json.loads(row[8])
                 return {
-                    "id": str(row[0]), "session_id": str(row[1]), "user_id": row[10], "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "SCORING-V1",
+                    "id": str(row[0]), "session_id": str(row[1]), "user_id": row[10], "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "IAQ-PROVISIONAL-ACCURACY-1", "score_kind": row[12] or "provisional_domain_signal", "norm_version": row[13],
                     "composite": int(row[2]) if row[2] is not None else None, "domain_scores": {domain: int(score) if score is not None else None for _, domain, score in domain_rows}, "domain_metrics": metrics,
                     "confidence": row[3], "quality": quality, "answered_count": row[6], "question_count": row[5], "duration_seconds": 2100,
                     "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4], "access_tier": row[11] or "summary",

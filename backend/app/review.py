@@ -22,6 +22,10 @@ REQUIRED_CHECKS = (
 )
 
 ITEM_REVIEWS: Dict[str, List[Dict[str, Any]]] = {}
+# The local review registry is useful for QA, but production release evidence
+# must be durable and queryable from PostgreSQL. Keep the readiness boundary
+# explicit until the DB-backed reviewer repository is wired in.
+POSTGRES_REVIEW_STORE_READY = False
 
 
 def now() -> str:

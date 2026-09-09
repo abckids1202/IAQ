@@ -8,7 +8,8 @@ from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseC
 
 def test_domain_scoring_is_versioned_and_provisional():
     result = score_domains([{"item_id": "one", "answer": "A", "response_time_ms": 4000}], {"one": "abstract_reasoning"}, {"one": "A"})
-    assert result.score_version == "SCORING-V1"
+    assert result.score_version == "IAQ-PROVISIONAL-ACCURACY-1"
+    assert result.score_kind == "provisional_domain_signal"
     assert result.domain_scores["abstract_reasoning"] is None
     assert result.domain_metrics["abstract_reasoning"]["interpretation_eligible"] is False
     assert result.confidence == "low"
@@ -23,6 +24,21 @@ def test_fit_and_confidence_are_bounded():
     result = major_fit({"abstract_reasoning": 80}, {"I": 90, "A": 70, "C": 60}, 65, {"abstract_reasoning": 1})
     assert 0 <= result["fit"] <= 100
     assert 0 <= recommendation_confidence(7, .34, 5, 24) <= 100
+
+
+def test_provisional_signal_reports_observed_accuracy_without_synthetic_floor():
+    result = score_domains(
+        [
+            {"item_id": "one", "answer": "wrong", "response_time_ms": 4000},
+            {"item_id": "two", "answer": "wrong", "response_time_ms": 4000},
+            {"item_id": "three", "answer": "wrong", "response_time_ms": 4000},
+            {"item_id": "four", "answer": "wrong", "response_time_ms": 4000},
+        ],
+        {"one": "abstract_reasoning", "two": "abstract_reasoning", "three": "abstract_reasoning", "four": "abstract_reasoning"},
+        {"one": "right", "two": "right", "three": "right", "four": "right"},
+    )
+    assert result.domain_scores["abstract_reasoning"] == 0
+    assert result.composite is None
 
 
 def test_quality_flags_rapid_and_interruptions():
@@ -83,3 +99,19 @@ def test_expired_session_cannot_start_or_accept_an_answer():
     with pytest.raises(Exception):
         start_session(session["id"])
     assert SESSIONS[session["id"]]["status"] == "timed_out"
+
+
+def test_presented_order_is_bound_to_the_randomized_form():
+    session = create_session("iaq-cognitive", SessionCreate())
+    first = start_session(session["id"])["next_item"]
+    with pytest.raises(Exception):
+        submit_response(session["id"], ResponseCreate(item_id=first["id"], answer=ITEMS[first["id"]]["answer"], response_time_ms=4200, presented_order=1), f"order:{session['id']}")
+
+
+def test_minor_practice_is_ephemeral_and_unscored():
+    session = create_session("iaq-cognitive", SessionCreate(mode="practice", age_band="15-17"))
+    first = start_session(session["id"])["next_item"]
+    submit_response(session["id"], ResponseCreate(item_id=first["id"], answer=ITEMS[first["id"]]["answer"], response_time_ms=4200, presented_order=0), f"practice:{session['id']}")
+    result = submit_session(session["id"])
+    assert result["practice"] is True
+    assert session["id"] not in SESSIONS

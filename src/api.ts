@@ -14,13 +14,18 @@ const domainLabels: Record<string, Domain> = {
 }
 
 type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options: string[]; helper?: string; visual?: string[]; render_type?: string; render_parameters?: Record<string, unknown> }
-type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number }
-type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string }
+type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number; mode?: string; language?: string; practice?: boolean }
+type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string; mode?: string; practice?: boolean }
 type ApiResult = {
+  practice?: boolean
+  status?: string
+  message?: string
   id: string
   session_id: string
   assessment_version: string
   score_version: string
+  score_kind?: string
+  norm_version?: string | null
   composite: number | null
   domain_scores: Record<string, number | null>
   domain_metrics: Record<string, { score: number | null; answered: number; correct: number; accuracy: number | null; median_response_time_ms: number | null; relative: string; interpretation_eligible?: boolean; evidence_note?: string }>
@@ -77,6 +82,8 @@ function normalizeResult(result: ApiResult): AssessmentResult {
     sessionId: result.session_id,
     assessmentVersion: result.assessment_version,
     scoreVersion: result.score_version,
+    scoreKind: result.score_kind,
+    normVersion: result.norm_version,
     composite: result.composite,
     domainScores,
     domainMetrics,
@@ -92,29 +99,36 @@ function normalizeResult(result: ApiResult): AssessmentResult {
   }
 }
 
-export async function startRandomizedAssessment(): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number }> {
-  const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.3', mode: 'complete' }) })
-  const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
-  return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0 }
+export async function startRandomizedAssessment(): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
+  return startAssessmentWithOptions('complete', 'adult', 'en')
 }
 
-export async function resumeRandomizedAssessment(sessionId: string): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number }> {
+export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
+  const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.3', mode, age_band: ageBand, language }) })
+  const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
+  return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0, practice: Boolean(session.practice || mode === 'practice') }
+}
+
+export async function resumeRandomizedAssessment(sessionId: string): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   const session = await request<SessionSummary>(`/sessions/${sessionId}`)
   await request<{ status: string }>(`/sessions/${sessionId}/start`, { method: 'POST' })
   const next = await request<ApiQuestion & { complete?: boolean; expired?: boolean }>(`/sessions/${sessionId}/next-item`)
   if (next.expired || next.complete) throw new Error('This assessment session has ended.')
-  return { sessionId, question: normalize(next), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: session.answered_count }
+  return { sessionId, question: normalize(next), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: session.answered_count, practice: Boolean(session.practice || session.mode === 'practice') }
 }
 
 export async function saveAndGetNext(sessionId: string, question: Question, answer: string, order: number, responseTimeMs: number): Promise<Question | null> {
-  await request(`/sessions/${sessionId}/responses`, { method: 'POST', headers: { 'Idempotency-Key': `${sessionId}:${question.id}` }, body: JSON.stringify({ item_id: question.id, answer, response_time_ms: responseTimeMs, presented_order: order }) })
+  await request(`/sessions/${sessionId}/responses`, { method: 'POST', headers: { 'Idempotency-Key': `${sessionId}:${question.id}` }, body: JSON.stringify({ item_id: question.id, answer, response_time_ms: responseTimeMs, presented_order: Math.max(0, order) }) })
   const next = await request<ApiQuestion & { complete?: boolean; expired?: boolean }>(`/sessions/${sessionId}/next-item`)
   if (next.expired) throw new Error('The assessment time has ended.')
   return next.complete ? null : normalize(next)
 }
 
-export async function finishAssessment(sessionId: string): Promise<AssessmentResult> {
-  const result = await request<ApiResult>(`/sessions/${sessionId}/submit`, { method: 'POST' })
+export type PracticeCompletion = { practice: true; status: string; message: string }
+
+export async function finishAssessment(sessionId: string): Promise<AssessmentResult | PracticeCompletion> {
+  const result = await request<ApiResult & { practice?: boolean }>(`/sessions/${sessionId}/submit`, { method: 'POST' })
+  if (result.practice) return { practice: true, status: result.status || 'complete', message: result.message || 'Practice complete.' }
   return normalizeResult(result)
 }
 
