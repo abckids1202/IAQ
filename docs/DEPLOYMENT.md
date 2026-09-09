@@ -4,6 +4,22 @@
 
 Run `npm install && npm run dev` for the frontend and `uvicorn app.main:app --reload --port 8000` from `backend/` for the API. `docker compose up -d postgres` starts a local Postgres service.
 
+## Vercel + Render deployment
+
+The repository includes `vercel.json` for the Vite frontend and `render.yaml`
+for the FastAPI service. In Vercel, use the repository root, build with
+`npm run build`, and publish `dist`. Set `VITE_API_BASE_URL` to the deployed
+Render API URL without a trailing slash. In Render, use the `backend/` root
+directory, Python 3.12, `pip install -r requirements.txt`, and
+`uvicorn app.main:app --host 0.0.0.0 --port $PORT`; `/health` is the health check.
+
+The Render template deliberately starts in production mode and leaves all
+provider secrets blank. The service will remain blocked by `/ready` until
+Postgres, Supabase Auth, reviewed items, Midtrans, Resend, CORS, and the
+application URL are configured. Do not change it to development mode on a
+public URL: seeded accounts and the fixed development OTP are for local smoke
+tests only.
+
 ## Production checklist
 
 - Use Python 3.12, a managed PostgreSQL instance, Alembic migrations, and a secret manager.

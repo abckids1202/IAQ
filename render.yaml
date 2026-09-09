@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: iaq-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: IAQ_ENV
+        value: production
+      - key: IAQ_AUTH_MODE
+        value: supabase
+      - key: IAQ_REQUIRE_PERSISTENCE
+        value: "true"
+      - key: IAQ_REQUIRE_REVIEWED_ITEMS
+        value: "true"
+      - key: IAQ_ACCESS_STORE
+        value: postgres
+      - key: PAYMENTS_ENABLED
+        value: "true"
+      - key: MIDTRANS_IS_PRODUCTION
+        value: "false"
+      - key: MIDTRANS_LIVE_ENABLED
+        value: "false"
+      - key: IAQ_AI_ENABLED
+        value: "false"
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: IAQ_ALLOWED_ORIGINS
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: ALLOWED_REDIRECT_ORIGINS
+        sync: false
+      - key: IAQ_DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: SUPABASE_JWT_AUDIENCE
+        value: authenticated
+      - key: MIDTRANS_SERVER_KEY
+        sync: false
+      - key: MIDTRANS_MERCHANT_ID
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
