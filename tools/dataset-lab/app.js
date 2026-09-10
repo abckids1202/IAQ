@@ -159,10 +159,12 @@ function renderOptionButton(index, contentRenderer) {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'option-button'
+  button.dataset.choiceIndex = String(index)
   button.setAttribute('role', 'radio')
   button.setAttribute('aria-checked', 'false')
   const letter = document.createElement('b')
-  letter.textContent = String.fromCharCode(65 + index)
+  const choiceLabel = String.fromCharCode(65 + index)
+  letter.textContent = choiceLabel
   const content = document.createElement('span')
   contentRenderer(content)
   button.append(letter, content)
@@ -174,20 +176,20 @@ function renderVisualLabels(item) {
   const options = $('options')
   options.className = 'options visual-label-options'
   options.innerHTML = ''
-  if (item.option_count !== 4) {
-    const blocked = document.createElement('p')
-    blocked.className = 'blocked-note'
-    blocked.textContent = 'This visual item is blocked because it does not contain exactly four stored answer choices.'
-    options.appendChild(blocked)
-    return
-  }
   for (let index = 0; index < 4; index += 1) {
     const button = renderOptionButton(index, (content) => {
       content.className = 'label-only-option'
-      content.textContent = ''
+      content.textContent = `Choice ${String.fromCharCode(65 + index)}`
     })
-    button.setAttribute('aria-label', `Visual option ${String.fromCharCode(65 + index)} shown in the image`)
+    button.setAttribute('aria-label', `Choice ${String.fromCharCode(65 + index)} shown in the image`)
+    if (item.option_count !== 4) button.disabled = true
     options.appendChild(button)
+  }
+  if (item.option_count !== 4) {
+    const blocked = document.createElement('p')
+    blocked.className = 'blocked-note visual-choice-warning'
+    blocked.textContent = 'These four controls are shown for inspection, but checking is blocked because the record does not contain exactly four stored answer choices.'
+    options.appendChild(blocked)
   }
 }
 
@@ -379,7 +381,7 @@ function renderItem(item) {
   $('check-button').textContent = 'Check answer ✓'
   if (item.presentation_mode === 'memory_sequence' || item.presentation_mode === 'memory_grid' || item.presentation_mode === 'memory_incomplete') {
     renderMemoryStudy(item)
-  } else if (item.presentation_mode === 'visual_labels') {
+  } else if (item.presentation_mode === 'visual_labels' || item.kind === 'visual') {
     renderVisualLabels(item)
   } else {
     renderTextOptions(item)

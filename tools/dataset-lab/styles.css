@@ -93,6 +93,7 @@ select { width: 100%; padding: 12px 10px; color: var(--ink); border: 1px solid v
 .answer-label span:last-child { color: var(--cobalt); }
 .options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .option-button { min-height: 66px; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 2px; background: transparent; color: var(--ink); text-align: left; }
+.option-button { width: 100%; }
 .option-button:hover:not(:disabled), .option-button.selected { border-color: var(--cobalt); background: #f1f4ff; }
 .option-button > b { flex: none; display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--border); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .option-button.selected > b { border-color: var(--cobalt); background: var(--cobalt); color: #fff; }
@@ -101,8 +102,10 @@ select { width: 100%; padding: 12px 10px; color: var(--ink); border: 1px solid v
 .option-button.incorrect { border-color: var(--coral); background: #fff1ed; }
 .option-button > span:last-child { min-width: 0; }
 .visual-label-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.visual-label-options .option-button { min-height: 54px; align-items: center; justify-content: flex-start; }
-.label-only-option { color: var(--muted); font-size: 12px; }
+.visual-label-options .option-button { min-height: 64px; align-items: center; justify-content: flex-start; }
+.visual-label-options .option-button > b { width: 32px; height: 32px; font-size: 14px; }
+.label-only-option { color: var(--ink); font-size: 13px; font-weight: 700; letter-spacing: .01em; }
+.visual-choice-warning { grid-column: 1 / -1; }
 .blocked-note { margin: 0; padding: 13px 14px; border-left: 3px solid var(--coral); background: #fff1ed; color: #8d3329; font-size: 12px; line-height: 1.5; }
 .memory-stage { margin: 22px 0 0; padding: 16px; border: 1px solid var(--border); background: #f0f5f3; }
 .memory-phase-line { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
