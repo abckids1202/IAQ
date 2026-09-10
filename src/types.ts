@@ -19,6 +19,10 @@ export type Question = {
   visual?: string[]
   renderType?: string
   renderParameters?: Record<string, unknown>
+  imageUrl?: string
+  memoryResponseType?: 'ordered_sequence' | 'cell_set'
+  memoryInputLength?: number
+  memoryGridSize?: number
 }
 
 export type Major = {

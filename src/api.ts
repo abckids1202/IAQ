@@ -13,7 +13,7 @@ const domainLabels: Record<string, Domain> = {
   processing_speed: 'Processing speed'
 }
 
-type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options: string[]; helper?: string; visual?: string[]; render_type?: string; render_parameters?: Record<string, unknown> }
+type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[]; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number; mode?: string; language?: string; practice?: boolean }
 type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string; mode?: string; practice?: boolean }
 type ApiResult = {
@@ -57,7 +57,8 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = 8
 }
 
 function normalize(item: ApiQuestion): Question {
-  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options, helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters }
+  const imageUrl = item.image_url ? (item.image_url.startsWith('http') ? item.image_url : `${API_BASE}${item.image_url}`) : undefined
+  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options || [], helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters, imageUrl, memoryResponseType: item.memory_response_type, memoryInputLength: item.memory_input_length, memoryGridSize: item.memory_grid_size }
 }
 
 function normalizeResult(result: ApiResult): AssessmentResult {

@@ -360,6 +360,21 @@ h3 { font-size: 15px; line-height: 1.35; letter-spacing: -.025em; margin-bottom:
 .memory-recall { background: #fffdf8; }
 .memory-recall-copy { margin-left: 66px; }
 .memory-recall .option-grid { margin-left: 66px; }
+.assessment-image { margin: 0 auto 26px; padding: 12px; border: 1px solid var(--line); background: #fff; text-align: center; }
+.assessment-image img { display: block; max-width: 100%; max-height: 420px; margin: auto; object-fit: contain; }
+.external-visual-image { position: relative; overflow: hidden; }
+.external-visual-image::after { content: ''; position: absolute; z-index: 1; left: 12px; right: 12px; background: #fff; pointer-events: none; }
+.external-visual-image.abstract-reasoning::after,
+.external-visual-image.deductive-logic::after,
+.external-visual-image.visual-spatial-reasoning::after { top: 12%; height: 11%; }
+.external-visual-image.numerical-reasoning::after { top: 17%; height: 12%; }
+.memory-image { width: 100%; max-height: 270px !important; }
+.memory-sequence-input { width: min(100%, 360px); padding: 14px 16px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: 700 25px var(--font-mono); letter-spacing: .2em; }
+.memory-input-hint { color: var(--ui-muted); font: 10px var(--font-mono); }
+.memory-recall-grid { display: grid; gap: 5px; width: max-content; margin-left: 66px; }
+.memory-cell { width: 42px; height: 42px; border: 1px solid #b7c1bc; background: #fff; }
+.memory-cell:hover, .memory-cell.selected { border-color: var(--cobalt); background: var(--cobalt); }
+.memory-cell.selected { box-shadow: inset 0 0 0 4px #fff; }
 
 .dataset-review-panel { margin-top: 32px; padding: 28px; }
 .dataset-review-head { display: flex; justify-content: space-between; gap: 28px; align-items: flex-start; padding-bottom: 24px; border-bottom: 1px solid var(--ui-border); }

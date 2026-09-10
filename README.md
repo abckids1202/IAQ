@@ -83,6 +83,16 @@ For the machine-integrity report, run `python -m app.dataset_audit` from
 `backend/`. A clean audit still means “ready for human review,” not “ready for
 student use.”
 
+For local QA, the working Dataset Lab catalog can be used by the main assessment
+through an explicit opt-in. Keep the research folders under `data/assessment`,
+then set `IAQ_ASSESSMENT_SOURCE=staged` and
+`IAQ_ALLOW_STAGED_ITEMS=true` in the backend environment. This combines the
+five visual/memory banks and English verbal research records with the authored
+processing-speed bank, preserves the 56-question balanced form, serves visual
+stimuli from the backend, and provides the ordered-sequence or cell-grid memory
+recall UI. This is QA-only: staged records remain unreviewed and must not be
+enabled in production or presented as official IQ content.
+
 After applying the migrations, import the quarantined catalog into the
 server-side review tables with `python -m app.dataset_import` from `backend/`.
 The import is idempotent, stores answer keys only in `dataset_candidates`, and

@@ -29,6 +29,7 @@ from .domain import DOMAINS, classify_session_quality, score_domains, score_rias
 from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, REVIEWED_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready, reviewed_counts, review_gate_ready
 from .persistence import PostgresAssessmentStore
 from . import access, ai, dataset_audit, email_delivery, evaluation, external_data, payments, review, supabase_auth
+from . import staged_assessment
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -50,9 +51,15 @@ ITEMS: Dict[str, Dict[str, Any]] = {
     "memory-01": {"id": "memory-01", "domain": "working_memory", "type": "memory", "prompt": "Remember this sequence, then select it in the same order.", "options": ["7-2-9-4", "7-9-2-4", "2-7-4-9", "9-4-7-2"], "answer": "7-2-9-4", "status": "ACTIVE"},
     "speed-01": {"id": "speed-01", "domain": "processing_speed", "type": "speed", "prompt": "Find the only pair of matching symbols.", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
 }
-# The reviewed bank is the source of truth. The small legacy entries above are
-# retained as a migration note for the first demo build.
+# The authored bank is the safe default. The staged source is opt-in and is
+# intended for local QA of the Dataset Lab catalog, not an automatic release.
 ITEMS = {item["id"]: item for item in QUESTION_BANK}
+ASSESSMENT_SOURCE = os.getenv("IAQ_ASSESSMENT_SOURCE", "authored").lower()
+if ASSESSMENT_SOURCE == "staged":
+    staged_items = staged_assessment.load_items()
+    authored_speed = {item["id"]: item for item in QUESTION_BANK if item.get("domain") == "processing_speed"}
+    if staged_items:
+        ITEMS = {**authored_speed, **staged_items}
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
@@ -240,7 +247,7 @@ def serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
 
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Return a strict student payload; internal provenance never leaves the API."""
-    allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
+    allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type", "image_url", "memory_response_type", "memory_input_length", "memory_grid_size"}
     payload = {key: value for key, value in item.items() if key in allowed and value is not None}
     if item.get("type") == "memory":
         # The transient stimulus is necessary to run delayed recall. It is
@@ -289,12 +296,13 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     if os.getenv("IAQ_ENV", "development").lower() == "production" and mode != "practice" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
         raise HTTPException(503, "Production assessments require the reviewed-item release gate")
     per_domain = 8 if mode == "complete" else 2
-    eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"}]
+    allow_staged = ASSESSMENT_SOURCE == "staged" and os.getenv("IAQ_ALLOW_STAGED_ITEMS", "false").lower() == "true" and os.getenv("IAQ_ENV", "development").lower() != "production"
+    eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and (item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"} or (allow_staged and item.get("data_origin") in {"IAQ_GENERATED_RESEARCH_DATA", "EXTERNAL_RESEARCH_DATA"}))]
     # The local development preview can still exercise the full assessment
     # contract while the generated reserve is awaiting human review. This
     # fallback is deliberately disabled whenever the pilot review gate is on.
     family_ready = all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS)
-    if (not eligible_items or not family_ready) and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
+    if (not eligible_items or not family_ready) and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true" and not allow_staged:
         eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and item.get("status") in {"PILOT", "ACTIVE"}]
     if os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true" and mode != "practice":
         eligible_items = [item for item in eligible_items if review.review_summary(item)["review_ready"]]
@@ -746,7 +754,22 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
     expected_order = session["item_order"].index(payload.item_id)
     if payload.presented_order != expected_order:
         raise HTTPException(422, "The item order does not match this assessment session")
-    if payload.answer not in item["options"]:
+    if item.get("memory_response_type") in {"ordered_sequence", "cell_set"}:
+        try:
+            memory_response = json.loads(payload.answer)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise HTTPException(422, "Memory response is not valid JSON") from error
+        if not isinstance(memory_response, list) or any(not isinstance(value, int) or isinstance(value, bool) for value in memory_response):
+            raise HTTPException(422, "Memory response is unavailable")
+        if item["memory_response_type"] == "ordered_sequence":
+            valid_memory_response = len(memory_response) == item.get("memory_input_length") and all(0 <= value <= 9 for value in memory_response)
+        else:
+            grid_size = item.get("memory_grid_size") or 0
+            max_cell = grid_size * grid_size
+            valid_memory_response = len(memory_response) == len(set(memory_response)) and all(0 <= value < max_cell for value in memory_response)
+        if not valid_memory_response:
+            raise HTTPException(422, "Memory response is outside the allowed format")
+    elif payload.answer not in item["options"]:
         raise HTTPException(422, "Answer option is unavailable")
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
@@ -1352,6 +1375,17 @@ def external_dataset_asset(dataset: str, asset_path: str, request: Request) -> F
     asset = external_data.resolve_asset_path(dataset, asset_path)
     if not asset:
         raise HTTPException(404, "Dataset asset not found")
+    return FileResponse(asset)
+
+
+@app.get("/assessment-assets/{asset_path:path}")
+def staged_assessment_asset(asset_path: str) -> FileResponse:
+    """Serve only the image stimulus for the explicitly enabled staged source."""
+    if ASSESSMENT_SOURCE != "staged":
+        raise HTTPException(404, "Assessment asset not found")
+    asset = external_data.resolve_asset_path("five_domains", asset_path)
+    if not asset:
+        raise HTTPException(404, "Assessment asset not found")
     return FileResponse(asset)
 
 

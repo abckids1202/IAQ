@@ -27,6 +27,10 @@ services:
         value: "false"
       - key: IAQ_AI_ENABLED
         value: "false"
+      - key: IAQ_ASSESSMENT_SOURCE
+        value: authored
+      - key: IAQ_ALLOW_STAGED_ITEMS
+        value: "false"
       - key: OPENAI_MODEL
         value: gpt-5-mini
       - key: IAQ_ALLOWED_ORIGINS
