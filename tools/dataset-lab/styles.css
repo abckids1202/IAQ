@@ -86,6 +86,15 @@ select { width: 100%; padding: 12px 10px; color: var(--ink); border: 1px solid v
 .context small { display: block; padding: 8px 10px; border-left: 2px solid var(--teal); font-size: 11px; }
 .image-wrap { margin: 22px 0; padding: 14px; border: 1px solid var(--border); background: #fff; text-align: center; }
 .image-wrap img { display: block; max-width: 100%; max-height: 340px; margin: auto; object-fit: contain; }
+/* Visual bank images repeat the same instruction that is already shown in the
+   record. Mask only that redundant line in the display; source assets and
+   answer data remain unchanged. */
+.visual-image-wrap { position: relative; overflow: hidden; }
+.visual-image-wrap::after { content: ''; position: absolute; z-index: 1; left: 14px; right: 14px; background: #fff; pointer-events: none; }
+.visual-image-wrap[data-visual-domain="abstract"]::after,
+.visual-image-wrap[data-visual-domain="logical"]::after,
+.visual-image-wrap[data-visual-domain="spatial"]::after { top: 12%; height: 11%; }
+.visual-image-wrap[data-visual-domain="numerical"]::after { top: 17%; height: 12%; }
 .stimulus-preview { margin: 22px 0; padding: 14px; background: #f0eee8; }
 .stimulus-preview strong { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: uppercase; }
 .stimulus-preview pre { max-height: 180px; margin: 8px 0 0; overflow: auto; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }

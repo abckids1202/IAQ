@@ -353,6 +353,9 @@ function renderItem(item) {
 
   const imageWrap = $('question-image-wrap')
   const image = $('question-image')
+  const isVisualItem = item.presentation_mode === 'visual_labels' || item.kind === 'visual'
+  imageWrap.classList.toggle('visual-image-wrap', isVisualItem && Boolean(item.image_url))
+  imageWrap.dataset.visualDomain = isVisualItem ? item.dataset : ''
   imageWrap.classList.toggle('hidden', !item.image_url)
   if (item.image_url) {
     image.src = item.image_url
