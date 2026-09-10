@@ -328,8 +328,11 @@ function renderItem(item) {
   state.memory = { stage: 'study', config: null, response: [] }
   $('empty-state').classList.add('hidden')
   $('question-state').classList.remove('hidden')
+  const isVisualItem = item.presentation_mode === 'visual_labels' || item.kind === 'visual'
   setText('question-dataset', `${item.dataset_label} · ${item.presentation_mode}`)
-  setText('question-title', item.prompt || 'Untitled question')
+  const questionTitle = $('question-title')
+  questionTitle.classList.toggle('hidden', isVisualItem)
+  questionTitle.textContent = isVisualItem ? '' : (item.prompt || 'Untitled question')
   setText('question-index', item.id)
   setText('answer-instruction', item.presentation_mode.startsWith('memory_') ? 'Recall response' : 'Choose one answer')
   $('answer-state').textContent = 'Not answered'
@@ -353,7 +356,6 @@ function renderItem(item) {
 
   const imageWrap = $('question-image-wrap')
   const image = $('question-image')
-  const isVisualItem = item.presentation_mode === 'visual_labels' || item.kind === 'visual'
   imageWrap.classList.toggle('visual-image-wrap', isVisualItem && Boolean(item.image_url))
   imageWrap.dataset.visualDomain = isVisualItem ? item.dataset : ''
   imageWrap.classList.toggle('hidden', !item.image_url)
