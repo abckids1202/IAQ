@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IAQ Dataset Lab</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="IAQ Dataset Lab home"><span class="brand-mark">IAQ</span><span>Dataset Lab</span></a>
+      <div class="topbar-note"><span class="status-dot"></span> local, read-only research workspace</div>
+    </header>
+
+    <main class="shell">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">Before the website · private inspection tool</p>
+          <h1>Try the question bank<br /><em>before it reaches students.</em></h1>
+          <p class="intro-copy">Load one item at a time, check the visual rendering, answer it yourself, and inspect the rule only after you submit. This lab does not change review status or production data.</p>
+        </div>
+        <div class="lab-badge"><span>01</span><strong>Read</strong><span>02</span><strong>Answer</strong><span>03</span><strong>Review</strong></div>
+      </section>
+
+      <section id="summary" class="summary-grid" aria-label="Dataset summary">
+        <div class="stat"><span>Loaded items</span><strong id="stat-total">—</strong><small>across the local research banks</small></div>
+        <div class="stat"><span>With images</span><strong id="stat-images">—</strong><small>assets resolved automatically</small></div>
+        <div class="stat"><span>Human reviewed</span><strong id="stat-reviewed">—</strong><small>should stay zero until review</small></div>
+        <div class="stat warning"><span>Content problems</span><strong id="stat-content-issues">—</strong><small>structural issues that block checking</small></div>
+        <div class="stat warning"><span>Readiness warnings</span><strong id="stat-readiness">—</strong><small>review and calibration gates</small></div>
+      </section>
+
+      <section class="workspace">
+        <aside class="sidebar" aria-label="Dataset controls">
+          <div class="panel-heading"><p class="eyebrow">Choose a bank</p><h2>What do you want to test?</h2></div>
+          <label class="field-label" for="dataset-select">Dataset</label>
+          <select id="dataset-select">
+            <option value="all">All loaded datasets</option>
+            <option value="abstract">Abstract reasoning</option>
+            <option value="logical">Logical reasoning</option>
+            <option value="numerical">Numerical reasoning</option>
+            <option value="spatial">Spatial reasoning</option>
+            <option value="memory">Working memory</option>
+            <option value="verbal">Verbal / reading research</option>
+          </select>
+          <label class="field-label" for="locale-select">Question language</label>
+          <select id="locale-select">
+            <option value="en">English</option>
+            <option value="id">Bahasa Indonesia where available</option>
+          </select>
+          <button id="next-button" class="primary-button" type="button">Load a question <span>→</span></button>
+          <button id="reset-button" class="secondary-button" type="button">Reset seen items</button>
+          <div class="rule-box"><strong>What this lab checks</strong><ul><li>Does the question make sense?</li><li>Does the image match the record?</li><li>Does the response format fit the task?</li><li>Is the explanation defensible?</li></ul></div>
+          <div class="coverage-note"><strong>Coverage note</strong><p>The supplied folders contain five generated visual banks plus verbal research data. A separate processing-speed JSONL bank was not supplied, so this lab does not invent one.</p></div>
+          <div id="dataset-details" class="dataset-details" aria-live="polite"></div>
+        </aside>
+
+        <section class="question-panel" aria-live="polite">
+          <div id="empty-state" class="empty-state"><div class="empty-number">◎</div><p class="eyebrow">Ready when you are</p><h2>Load a question to begin.</h2><p>Choose a bank on the left. The first question will be random, and the same item will not repeat during this run.</p></div>
+          <div id="question-state" class="hidden">
+            <div class="question-head"><div><p id="question-dataset" class="eyebrow">—</p><h2 id="question-title">—</h2></div><div id="question-index" class="item-index">ITEM —</div></div>
+            <div id="status-strip" class="status-strip"></div>
+            <div id="question-context" class="context"></div>
+            <div id="question-image-wrap" class="image-wrap hidden"><img id="question-image" alt="Question stimulus" /></div>
+            <div id="stimulus-preview" class="stimulus-preview hidden"></div>
+            <div id="memory-stage" class="memory-stage hidden">
+              <div class="memory-phase-line"><strong id="memory-phase-label">Study phase</strong><span id="memory-protocol-note"></span></div>
+              <p id="memory-instructions"></p>
+              <button id="memory-recall-button" class="secondary-button" type="button">Begin recall</button>
+              <div id="memory-recall-panel" class="memory-recall-panel hidden"></div>
+            </div>
+            <div class="answer-label"><span id="answer-instruction">Choose one answer</span><span id="answer-state">Not answered</span></div>
+            <div id="options" class="options" role="radiogroup" aria-label="Answer options"></div>
+            <div class="question-actions"><button id="check-button" class="primary-button" type="button" disabled>Check answer <span>✓</span></button><button id="next-inline-button" class="secondary-button" type="button">Skip to another</button></div>
+            <div id="feedback" class="feedback hidden" role="status"></div>
+            <details id="technical-details" class="technical"><summary>Technical record details</summary><dl id="technical-list"></dl></details>
+          </div>
+        </section>
+      </section>
+
+      <section class="footer-note"><strong>Important:</strong> these records are research candidates. “Unreviewed”, “not calibrated”, and “not production eligible” are expected until independent human review, licensing checks, and pilot evidence are complete.</section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
