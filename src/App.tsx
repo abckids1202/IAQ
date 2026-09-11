@@ -115,6 +115,7 @@ function NotFound() {
 
 function App() {
   const location = useLocation()
+  const signedIn = typeof window !== 'undefined' && Boolean(localStorage.getItem('iaq-session-token'))
   const [booting, setBooting] = useState(true)
   useEffect(() => {
     const savedTheme = localStorage.getItem('iaq-theme')
@@ -177,7 +178,7 @@ function App() {
     <Route path="/app/settings/security" element={<StudentAppShell profile={profile}><AccountSettings /></StudentAppShell>} />
     <Route path="/app/settings/privacy" element={<StudentAppShell profile={profile}><Privacy /></StudentAppShell>} />
     <Route path="/app/settings/sessions" element={<StudentAppShell profile={profile}><AccountSettings /></StudentAppShell>} />
-    <Route path="/" element={<StudentAppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></StudentAppShell>} />
+    <Route path="/" element={signedIn ? <StudentAppShell profile={profile}><Home profile={profile} savedMajors={savedMajors} /></StudentAppShell> : <PublicSite />} />
     <Route path="/assess" element={<StudentAppShell profile={profile}><AssessLanding /></StudentAppShell>} />
     <Route path="/assess/session" element={<Assessment onComplete={completeAssessment} />} />
     <Route path="/compass" element={<StudentAppShell profile={profile}><Compass profile={profile} savedMajors={savedMajors} toggleMajor={toggleMajor} /></StudentAppShell>} />
@@ -218,7 +219,8 @@ function WorkspaceSwitcher({ active }: { active: string }) {
 }
 
 function ProfileMenu({ profile, label }: { profile?: Profile; label: string }) {
-  return <details className="profile-menu"><summary><div className="avatar">AP</div><div><strong>{profile?.name || 'Ari Pratama'}</strong><span>{label}</span></div><span className="profile-chevron">⌄</span></summary><div className="profile-popover"><Link to="/app/settings/profile">Account</Link><Link to="/app/billing">Plan & billing</Link><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Privacy</Link><Link to="/auth/login">Switch account</Link></div></details>
+  const guest = typeof window !== 'undefined' && !localStorage.getItem('iaq-session-token')
+  return <details className="profile-menu"><summary><div className="avatar">{guest ? 'G' : 'AP'}</div><div><strong>{guest ? 'Guest' : profile?.name || 'Ari Pratama'}</strong><span>{guest ? 'Not signed in' : label}</span></div><span className="profile-chevron">⌄</span></summary><div className="profile-popover">{guest ? <><span className="profile-popover-note">You can take the free assessment without an account.</span><Link to="/auth/login?returnTo=/assess">Sign in or create account</Link></> : <><Link to="/app/settings/profile">Account</Link><Link to="/app/billing">Plan & billing</Link><Link to="/methodology">Help & Methodology</Link><Link to="/privacy">Privacy</Link><Link to="/auth/login">Switch account</Link></>}</div></details>
 }
 
 function StudentAppHeader({ profile }: { profile: Profile }) {
@@ -445,7 +447,7 @@ function DeterministicStimulus({ question }: { question: Question }) {
   const hash = [...seed].reduce((total, character) => total + character.charCodeAt(0), 0)
   const shapes = ['circle', 'square', 'triangle', 'diamond']
   const fills = ['outline', 'solid', 'striped']
-  const tiles = question.visual?.length ? question.visual : [0, 1, 2].map((offset) => `${shapes[(hash + offset) % shapes.length]}:${fills[(hash + offset * 2) % fills.length]}:${((hash + offset) * 90) % 360}`)
+  const tiles = Array.isArray(question.visual) && question.visual.length ? question.visual : [0, 1, 2].map((offset) => `${shapes[(hash + offset) % shapes.length]}:${fills[(hash + offset * 2) % fills.length]}:${((hash + offset) * 90) % 360}`)
   const drawShape = (shape: string, fill: string, rotation: number) => {
     const paint = fill === 'solid' ? '#0B1220' : 'none'
     const stroke = '#315CFF'
@@ -464,7 +466,7 @@ function DeterministicStimulus({ question }: { question: Question }) {
 function MemoryTrial({ question, selected, onChoose, disabled }: { question: Question; selected?: string; onChoose: (option: string) => void; disabled: boolean }) {
   const [phase, setPhase] = useState<'intro' | 'study' | 'recall'>('intro')
   const [remaining, setRemaining] = useState(3)
-  const visual = question.visual?.filter(Boolean) || []
+  const visual = Array.isArray(question.visual) ? question.visual.filter(Boolean) : []
   const stagedProtocol = question.memoryResponseType
   const parseResponse = () => {
     if (!selected) return [] as number[]

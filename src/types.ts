@@ -16,7 +16,9 @@ export type Question = {
   prompt: string
   helper?: string
   options: string[]
-  visual?: string[]
+  // Visual items use a list for legacy deterministic stimuli. Imported
+  // working-memory records may carry a structured study stimulus instead.
+  visual?: string[] | Record<string, unknown>
   renderType?: string
   renderParameters?: Record<string, unknown>
   imageUrl?: string

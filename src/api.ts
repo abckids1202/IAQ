@@ -13,7 +13,7 @@ const domainLabels: Record<string, Domain> = {
   processing_speed: 'Processing speed'
 }
 
-type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[]; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number }
+type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[] | Record<string, unknown>; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number; mode?: string; language?: string; practice?: boolean }
 type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string; mode?: string; practice?: boolean }
 type ApiResult = {
@@ -51,7 +51,7 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = 8
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const sessionToken = typeof window !== 'undefined' ? localStorage.getItem('iaq-session-token') : null
+    const sessionToken = getBrowserSessionToken()
     const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(sessionToken ? { 'X-IAQ-Session': sessionToken } : {}), ...(init?.headers || {}) } })
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as { detail?: string }
@@ -61,6 +61,13 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = 8
   } finally {
     window.clearTimeout(timeout)
   }
+}
+
+function getBrowserSessionToken(): string | null {
+  if (typeof window === 'undefined') return null
+  // A signed-in session always wins. The guest token is intentionally separate
+  // so the UI can tell an unsigned-in visitor from a real account.
+  return localStorage.getItem('iaq-session-token') || localStorage.getItem('iaq-guest-token')
 }
 
 function normalize(item: ApiQuestion): Question {
@@ -119,6 +126,7 @@ export async function startRandomizedAssessment(): Promise<{ sessionId: string; 
 }
 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
+  await ensureGuestSession()
   const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.3', mode, age_band: ageBand, language }) })
   const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
   return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0, practice: Boolean(session.practice || mode === 'practice') }
@@ -232,6 +240,7 @@ export type AccessUser = {
   age_band: string
   school_id?: string | null
   mfa_verified: boolean
+  is_guest?: boolean
 }
 
 export type Product = {
@@ -263,7 +272,22 @@ export async function devLogin(user: string): Promise<{ session_token: string; u
   const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/dev/login', { method: 'POST', body: JSON.stringify({ user }) })
   localStorage.setItem('iaq-session-token', result.session_token)
   localStorage.setItem('iaq-user', JSON.stringify(result.user))
+  localStorage.removeItem('iaq-guest-token')
+  localStorage.removeItem('iaq-guest-user')
   return result
+}
+
+export async function requestGuestSession(): Promise<{ session_token: string; user: AccessUser; permissions: string[] }> {
+  const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/guest', { method: 'POST' })
+  localStorage.setItem('iaq-guest-token', result.session_token)
+  localStorage.setItem('iaq-guest-user', JSON.stringify(result.user))
+  return result
+}
+
+export async function ensureGuestSession(): Promise<void> {
+  if (typeof window === 'undefined') return
+  if (localStorage.getItem('iaq-session-token') || localStorage.getItem('iaq-guest-token')) return
+  await requestGuestSession()
 }
 
 export async function requestOtp(email: string): Promise<{ accepted: boolean; development_code?: string }> {
@@ -274,6 +298,8 @@ export async function verifyOtp(email: string, code: string): Promise<{ session_
   const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email, code }) })
   localStorage.setItem('iaq-session-token', result.session_token)
   localStorage.setItem('iaq-user', JSON.stringify(result.user))
+  localStorage.removeItem('iaq-guest-token')
+  localStorage.removeItem('iaq-guest-user')
   return result
 }
 
@@ -298,6 +324,8 @@ export async function requestSupabaseOtp(email: string): Promise<void> {
 export async function verifySupabaseOtp(email: string, code: string): Promise<{ access_token: string }> {
   const result = await supabaseRequest<{ access_token: string }>('/verify', { email, token: code, type: 'email' })
   localStorage.setItem('iaq-session-token', result.access_token)
+  localStorage.removeItem('iaq-guest-token')
+  localStorage.removeItem('iaq-guest-user')
   return result
 }
 
@@ -328,12 +356,14 @@ export async function finishSupabaseCallback(): Promise<boolean> {
     const session = await result.json() as { access_token?: string }
     if (!session.access_token) throw new Error('Supabase returned no access token.')
     localStorage.setItem('iaq-session-token', session.access_token)
+    localStorage.removeItem('iaq-guest-token')
+    localStorage.removeItem('iaq-guest-user')
     localStorage.removeItem('iaq-supabase-pkce-verifier')
     return true
   }
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
   const token = hash.get('access_token')
-  if (token) { localStorage.setItem('iaq-session-token', token); return true }
+  if (token) { localStorage.setItem('iaq-session-token', token); localStorage.removeItem('iaq-guest-token'); localStorage.removeItem('iaq-guest-user'); return true }
   return false
 }
 
@@ -341,14 +371,23 @@ export async function logout(): Promise<void> {
   await request('/auth/logout', { method: 'POST' }).catch(() => undefined)
   localStorage.removeItem('iaq-session-token')
   localStorage.removeItem('iaq-user')
+  localStorage.removeItem('iaq-guest-token')
+  localStorage.removeItem('iaq-guest-user')
 }
 
 export async function getCurrentUser(): Promise<AccessUser> {
   return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
 }
 
-export async function captureIdentity(payload: { email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string } }> {
-  return request('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
+export async function captureIdentity(payload: { email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
+  const result = await request<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }>('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
+  if (result.session_token) {
+    localStorage.setItem('iaq-session-token', result.session_token)
+    localStorage.setItem('iaq-user', JSON.stringify(result.user))
+    localStorage.removeItem('iaq-guest-token')
+    localStorage.removeItem('iaq-guest-user')
+  }
+  return result
 }
 
 export async function listProducts(): Promise<Product[]> {

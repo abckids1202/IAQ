@@ -6,7 +6,7 @@ The service exposes resource-oriented endpoints for `/assessments`, `/sessions`,
 
 Responses use consistent HTTP errors. `POST /sessions/:id/responses` accepts `Idempotency-Key`, validates the item server-side, stores `data_origin`, and never returns the answer key. `POST /sessions/:id/submit` creates a result with assessment, scoring, confidence, quality, and disclaimer metadata.
 
-This local baseline uses demo identity. Production must validate tokens, enforce role permissions, and persist through the migration contract.
+The first visit is public and unsigned-in. `POST /auth/guest` creates a limited browser-scoped guest identity with free assessment access; it cannot create orders or access paid report/direction features. Email OTP promotes a new or returning student to an account. With `IAQ_ASSESSMENT_SOURCE=staged` and `IAQ_ALLOW_STAGED_ITEMS=true` in local development, sessions use the same imported Dataset Lab records and assets; those QA sessions/results remain process-local because their external item IDs are not yet in the authored Postgres item tables. Production must validate Supabase tokens, enforce role permissions, link any guest result to the signed-in account, and persist through the migration contract before enabling guest assessment access publicly.
 
 Optional AI endpoints never return answer keys and never write score fields. They require an owned result, use the configured server-side OpenAI adapter, mark output as `AI_ASSISTED`, and return `503` when `OPENAI_API_KEY` is not configured.
 # Access and commerce workflow

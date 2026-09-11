@@ -13,6 +13,10 @@ services:
         value: production
       - key: IAQ_AUTH_MODE
         value: supabase
+      # Keep anonymous assessment off until guest results can be durably linked
+      # to a Supabase account.
+      - key: IAQ_GUEST_ASSESSMENT_ENABLED
+        value: "false"
       - key: IAQ_REQUIRE_PERSISTENCE
         value: "true"
       - key: IAQ_REQUIRE_REVIEWED_ITEMS

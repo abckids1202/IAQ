@@ -63,10 +63,11 @@ ITEMS: Dict[str, Dict[str, Any]] = {
     "memory-01": {"id": "memory-01", "domain": "working_memory", "type": "memory", "prompt": "Remember this sequence, then select it in the same order.", "options": ["7-2-9-4", "7-9-2-4", "2-7-4-9", "9-4-7-2"], "answer": "7-2-9-4", "status": "ACTIVE"},
     "speed-01": {"id": "speed-01", "domain": "processing_speed", "type": "speed", "prompt": "Find the only pair of matching symbols.", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
 }
-# The authored bank is the safe default. The staged source is opt-in and is
-# intended for local QA of the Dataset Lab catalog, not an automatic release.
+# Local development uses the imported Dataset Lab catalog by default so the
+# main application exercises the same records and visual assets as the lab.
+# Production defaults to the authored bank and must pass the review gate.
 ITEMS = {item["id"]: item for item in QUESTION_BANK}
-ASSESSMENT_SOURCE = os.getenv("IAQ_ASSESSMENT_SOURCE", "authored").lower()
+ASSESSMENT_SOURCE = os.getenv("IAQ_ASSESSMENT_SOURCE", "staged" if os.getenv("IAQ_ENV", "development").lower() != "production" else "authored").lower()
 if ASSESSMENT_SOURCE == "staged":
     staged_items = staged_assessment.load_items()
     authored_speed = {item["id"]: item for item in QUESTION_BANK if item.get("domain") == "processing_speed"}
@@ -82,6 +83,10 @@ AI_INSIGHTS: Dict[str, Dict[str, Any]] = {}
 AI_OUTPUTS: Dict[str, Dict[str, Any]] = {}
 DATABASE_URL = os.getenv("IAQ_DATABASE_URL")
 PERSISTENCE = PostgresAssessmentStore(DATABASE_URL) if DATABASE_URL else None
+# Imported research records use external item IDs that are not present in the
+# authored Postgres item tables. Keep staged QA sessions/results in process
+# memory until an external-catalog persistence adapter is implemented.
+ASSESSMENT_PERSISTENCE = bool(PERSISTENCE) and ASSESSMENT_SOURCE != "staged"
 
 MAJORS = [
     {"id": "cs", "slug": "computer-science", "name": "Computer Science", "family": "Technology & systems", "vector": {"abstract_reasoning": .9, "deductive_logic": .9, "numerical_reasoning": .8}},
@@ -223,26 +228,38 @@ def _header_token(request: Optional[Request]) -> Optional[str]:
 def current_user(request: Optional[Request] = None) -> Dict[str, Any]:
     """Resolve the authenticated identity for local or provider-backed calls.
 
-    Until Supabase is configured, no-token local requests intentionally resolve
-    to the seeded student account so the existing assessment preview remains
-    runnable. Production deployments must set IAQ_AUTH_MODE=supabase and reject
-    this fallback in their auth middleware.
+    Unsigned-in local visitors resolve to a limited guest identity, never to a
+    seeded student. Production still requires a validated Supabase token for
+    saved accounts; guest assessment access is an explicit private-pilot flag.
     """
     auth_mode = os.getenv("IAQ_AUTH_MODE", "development").lower()
     if os.getenv("IAQ_ENV", "development").lower() == "production" and auth_mode != "supabase":
         raise HTTPException(503, "Production authentication is not configured")
+    # A few dependency-light service/unit helpers call endpoint functions
+    # without an HTTP request object. Keep that internal development context
+    # deterministic for existing tests; real browser requests always have a
+    # path and therefore use the guest branch below.
+    if auth_mode == "development" and (request is None or not request.scope.get("path")):
+        return access.USERS["demo-student"]
+    token = _header_token(request)
+    # Guest tokens are issued by this API and are intentionally separate from
+    # Supabase JWTs. This allows a first visit to start without an account while
+    # keeping staff and paid access behind the normal provider auth boundary.
+    guest_user = access.user_for_token(token)
+    if guest_user and guest_user.get("is_guest"):
+        return guest_user
     if auth_mode == "supabase":
         try:
-            return supabase_auth.user_from_token(_header_token(request) or "")
+            return supabase_auth.user_from_token(token or "")
         except supabase_auth.SupabaseAuthError as error:
             raise HTTPException(401, str(error)) from error
-    user = access.user_for_token(_header_token(request))
+    user = access.user_for_token(token)
     if user:
         return user
     requested_user = request.headers.get("x-iaq-user") if request else None
     if requested_user and os.getenv("IAQ_AUTH_MODE", "development") == "development":
         return access.user_for_identifier(requested_user)
-    return access.USERS["demo-student"]
+    return access.DEFAULT_GUEST_USER
 
 
 def require_permission(user: Dict[str, Any], permission: str) -> None:
@@ -287,7 +304,7 @@ def session_for(session_id: str) -> Optional[Dict[str, Any]]:
     # the production assessment store is configured.
     if session_id in SESSIONS:
         return SESSIONS[session_id]
-    if PERSISTENCE:
+    if ASSESSMENT_PERSISTENCE:
         return PERSISTENCE.get_session(session_id)
     return SESSIONS.get(session_id)
 
@@ -295,7 +312,7 @@ def session_for(session_id: str) -> Optional[Dict[str, Any]]:
 def persist_session(session: Dict[str, Any], values: Dict[str, Any]) -> None:
     if session.get("ephemeral"):
         session.update(values)
-    elif PERSISTENCE:
+    elif ASSESSMENT_PERSISTENCE:
         PERSISTENCE.update_session(session["id"], values)
     else:
         session.update(values)
@@ -303,12 +320,13 @@ def persist_session(session: Dict[str, Any], values: Dict[str, Any]) -> None:
 
 def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     """Create a balanced, no-repeat form from the reviewed question bank."""
-    if os.getenv("IAQ_ENV", "development").lower() == "production" and not PERSISTENCE and mode != "practice":
+    if os.getenv("IAQ_ENV", "development").lower() == "production" and not ASSESSMENT_PERSISTENCE and mode != "practice":
         raise HTTPException(503, "Production assessments require PostgreSQL persistence")
     if os.getenv("IAQ_ENV", "development").lower() == "production" and mode != "practice" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
         raise HTTPException(503, "Production assessments require the reviewed-item release gate")
     per_domain = 8 if mode == "complete" else 2
-    allow_staged = ASSESSMENT_SOURCE == "staged" and os.getenv("IAQ_ALLOW_STAGED_ITEMS", "false").lower() == "true" and os.getenv("IAQ_ENV", "development").lower() != "production"
+    staged_default = "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false"
+    allow_staged = ASSESSMENT_SOURCE == "staged" and os.getenv("IAQ_ALLOW_STAGED_ITEMS", staged_default).lower() == "true" and os.getenv("IAQ_ENV", "development").lower() != "production"
     eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and (item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"} or (allow_staged and item.get("data_origin") in {"IAQ_GENERATED_RESEARCH_DATA", "EXTERNAL_RESEARCH_DATA"}))]
     # The local development preview can still exercise the full assessment
     # contract while the generated reserve is awaiting human review. This
@@ -401,10 +419,22 @@ def auth_config() -> Dict[str, Any]:
         "google_enabled": os.getenv("AUTH_GOOGLE_ENABLED", "false").lower() == "true",
         "email_otp_enabled": os.getenv("AUTH_EMAIL_OTP_ENABLED", "true").lower() == "true",
         "payments_enabled": os.getenv("PAYMENTS_ENABLED", "true").lower() == "true",
+        "guest_enabled": os.getenv("IAQ_GUEST_ASSESSMENT_ENABLED", "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false").lower() == "true",
+        "guest_requires_account_for_saved_reports": True,
         "payment_provider": "midtrans" if os.getenv("MIDTRANS_SERVER_KEY") else "mock",
         "production_ready": runtime_readiness()["status"] == "ready" and os.getenv("IAQ_ENV", "development").lower() == "production",
         "readiness": runtime_readiness(),
     }
+
+
+@app.post("/auth/guest")
+def guest_login() -> Dict[str, Any]:
+    """Start an unsigned-in browser session for the free pilot assessment."""
+    enabled_default = "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false"
+    if os.getenv("IAQ_GUEST_ASSESSMENT_ENABLED", enabled_default).lower() != "true":
+        raise HTTPException(403, "Guest assessment access is disabled. Sign in or create an account to continue.")
+    token, user = access.issue_guest_session()
+    return {"session_token": token, "user": access.public_user(user), "permissions": access.permissions_for(user), "provider": "guest"}
 
 
 @app.post("/auth/dev/login")
@@ -639,7 +669,7 @@ def create_feedback(payload: FeedbackCreate) -> Dict[str, Any]:
 @app.get("/me")
 def me(request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    return {"id": user["id"], "name": user["display_name"], "email": user["email"], "roles": user["roles"], "role": user["roles"][0], "account_status": user["account_status"], "mfa_verified": user["mfa_verified"], "consented": True}
+    return {"id": user["id"], "name": user["display_name"], "display_name": user["display_name"], "email": user["email"], "roles": user["roles"], "role": user["roles"][0], "account_status": user["account_status"], "age_band": user.get("age_band", "unknown"), "mfa_verified": user["mfa_verified"], "is_guest": bool(user.get("is_guest", False)), "consented": True}
 
 
 @app.get("/assessments")
@@ -677,7 +707,7 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
     session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "language": payload.language, "age_band": payload.age_band, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": user["id"], "access_code": access_code if payload.mode != "practice" else None, "consent_snapshot": {}, "ephemeral": payload.mode == "practice", "data_origin": "PRACTICE" if payload.mode == "practice" else "REAL_PILOT"}
     # Practice is intentionally held in process memory and never written to
     # the assessment/results tables.
-    if PERSISTENCE and not session["ephemeral"]:
+    if ASSESSMENT_PERSISTENCE and not session["ephemeral"]:
         PERSISTENCE.create_session(session)
     else:
         SESSIONS[session_id] = session
@@ -786,13 +816,13 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     response = {"item_id": payload.item_id, "answer": payload.answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
-    if PERSISTENCE and not session.get("ephemeral"):
+    if ASSESSMENT_PERSISTENCE and not session.get("ephemeral"):
         accepted = PERSISTENCE.insert_response(session_id, payload.item_id, payload.answer, payload.response_time_ms, payload.presented_order, idempotency_key)
         if not accepted:
             return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     else:
         session["responses"][payload.item_id] = response
-    answered_count = len(session["responses"]) if not PERSISTENCE or session.get("ephemeral") else len(session["responses"]) + 1
+    answered_count = len(session["responses"]) if not ASSESSMENT_PERSISTENCE or session.get("ephemeral") else len(session["responses"]) + 1
     return {"accepted": True, "duplicate": False, "item_id": payload.item_id, "answered_count": answered_count}
 
 
@@ -803,7 +833,7 @@ def record_event(session_id: str, payload: EventCreate, request: Request = None)
         raise HTTPException(404, "Session not found")
     require_session_owner(session, request)
     event = {"id": str(uuid4()), "session_id": session_id, "event_type": payload.event_type, "metadata": payload.metadata, "created_at": NOW()}
-    if PERSISTENCE and not session.get("ephemeral"):
+    if ASSESSMENT_PERSISTENCE and not session.get("ephemeral"):
         PERSISTENCE.insert_event(session_id, event["id"], payload.event_type, payload.metadata)
     else:
         EVENTS.append(event)
@@ -868,7 +898,7 @@ def _result_record(result_id: str, request: Optional[Request] = None) -> Dict[st
             if session and session.get("user_id") != user["id"] and "platform_admin" not in user.get("roles", []):
                 raise HTTPException(404, "Result not found")
         return result
-    if PERSISTENCE:
+    if ASSESSMENT_PERSISTENCE:
         result = PERSISTENCE.get_result(result_id)
         if result:
             if request:
@@ -891,7 +921,7 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
         SESSIONS.pop(session_id, None)
         return {"practice": True, "status": "complete", "answered_count": len(session.get("responses", {})), "question_count": len(session.get("item_order", [])), "message": "Practice complete. No score or answers were saved."}
     if session.get("result_id"):
-        if PERSISTENCE:
+        if ASSESSMENT_PERSISTENCE:
             existing = PERSISTENCE.get_result(session["result_id"])
             if existing:
                 return result_projection(existing, request)
@@ -908,7 +938,7 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
         relative = "insufficient evidence" if value is None or score.composite is None else "stronger than your average" if value > score.composite + 3 else "lower than your average" if value < score.composite - 3 else "close to your average"
         domain_metrics[domain] = {**metric, "score": value, "relative": relative}
     RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "score_kind": score.score_kind, "norm_version": score.norm_version, "composite": score.composite, "iq_score": score.iq_score, "iq_score_kind": score.iq_score_kind, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": score.iq_score_scale, "iq_score_method": score.iq_score_method, "official_iq_enabled": False, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
-    if PERSISTENCE:
+    if ASSESSMENT_PERSISTENCE:
         PERSISTENCE.store_result_and_complete_session(session_id, RESULTS[result_id])
     else:
         session["status"] = "complete"
@@ -971,9 +1001,15 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
     if not payload.granted:
         raise HTTPException(400, "Pilot data consent is required before releasing the result")
     user = current_user(request)
-    user["email"] = payload.email.strip().lower()
-    user["display_name"] = payload.display_name.strip()
-    user["age_band"] = payload.age_band
+    was_guest = bool(user.get("is_guest"))
+    if was_guest and os.getenv("IAQ_AUTH_MODE", "development").lower() == "supabase":
+        raise HTTPException(401, "Sign in or create a Supabase account before saving your report")
+    if was_guest:
+        access.promote_guest_to_student(user, payload.email, payload.display_name, payload.age_band)
+    else:
+        user["email"] = payload.email.strip().lower()
+        user["display_name"] = payload.display_name.strip()
+        user["age_band"] = payload.age_band
     if PERSISTENCE:
         PERSISTENCE.store_identity(user["id"], user["email"], user["display_name"], user["age_band"], payload.consent_version, payload.granted)
     access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age_band": payload.age_band, "consent_version": payload.consent_version})
@@ -982,7 +1018,8 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         if not payload.guardian_email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email):
             raise HTTPException(422, "A guardian email is required for ages 15–17")
         guardian = create_guardian_consent(GuardianConsentCreate(guardian_email=payload.guardian_email, consent_version=payload.consent_version), request)
-    return {"user": access.public_user(user), "consent_version": payload.consent_version, "guardian_consent": guardian}
+    promoted_token = access.issue_dev_session(user["id"]) if was_guest else None
+    return {"user": access.public_user(user), "consent_version": payload.consent_version, "guardian_consent": guardian, "session_token": promoted_token, "provider": "development" if promoted_token else None}
 
 
 @app.post("/guardian-consents")

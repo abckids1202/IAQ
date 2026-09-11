@@ -25,6 +25,10 @@ def now() -> str:
 
 
 ROLE_PERMISSIONS: Dict[str, List[str]] = {
+    # Guests can start the free assessment and read the result created by
+    # their current browser session. They cannot create orders, access paid
+    # reports, or use staff workflows until they create/sign in to an account.
+    "guest": ["assessment.start", "result.self.read"],
     "student": [
         "profile.read", "profile.update", "assessment.start", "result.self.read",
         "direction.self.read", "entitlement.self.read", "order.self.create",
@@ -80,6 +84,22 @@ USERS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# This local-only fallback keeps read-only development requests useful when a
+# browser has not called POST /auth/guest yet. It is deliberately not the
+# seeded student account and is never used in production.
+DEFAULT_GUEST_USER: Dict[str, Any] = {
+    "id": "guest-anonymous",
+    "email": "guest-anonymous@guest.iaq.invalid",
+    "display_name": "Guest",
+    "roles": ["guest"],
+    "account_status": "guest",
+    "age_band": "unknown",
+    "school_id": None,
+    "mfa_verified": False,
+    "is_guest": True,
+}
+USERS[DEFAULT_GUEST_USER["id"]] = DEFAULT_GUEST_USER
+
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 GUARDIAN_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     "demo-guardian:demo-student": {
@@ -134,7 +154,9 @@ GUARDIAN_CONSENTS: Dict[str, Dict[str, Any]] = {}
 
 
 def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: user[key] for key in ("id", "email", "display_name", "roles", "account_status", "age_band", "school_id", "mfa_verified")}
+    payload = {key: user[key] for key in ("id", "email", "display_name", "roles", "account_status", "age_band", "school_id", "mfa_verified")}
+    payload["is_guest"] = bool(user.get("is_guest", False))
+    return payload
 
 
 def permissions_for(user: Dict[str, Any]) -> List[str]:
@@ -145,6 +167,49 @@ def issue_dev_session(user_id: str) -> str:
     token = f"iaq-dev-{uuid4()}"
     SESSIONS[token] = {"user_id": user_id, "created_at": now(), "provider": "development"}
     return token
+
+
+def issue_guest_session() -> tuple[str, Dict[str, Any]]:
+    """Create a pseudonymous, browser-scoped guest account for the pilot.
+
+    Guest accounts intentionally have no email and only receive the free
+    assessment entitlement. They are promoted to a student account only when
+    the user submits identity/consent after seeing their result.
+    """
+    user_id = f"guest-{uuid4().hex[:16]}"
+    user = {
+        "id": user_id,
+        "email": f"{user_id}@guest.iaq.invalid",
+        "display_name": "Guest",
+        "roles": ["guest"],
+        "account_status": "guest",
+        "age_band": "unknown",
+        "school_id": None,
+        "mfa_verified": False,
+        "is_guest": True,
+    }
+    USERS[user_id] = user
+    add_entitlement(user_id, "assessment.free.start", "guest_session", f"guest:{user_id}", quantity=1, granted_by="system")
+    token = f"iaq-guest-{secrets.token_urlsafe(32)}"
+    SESSIONS[token] = {"user_id": user_id, "created_at": now(), "provider": "guest", "guest": True}
+    return token, user
+
+
+def promote_guest_to_student(user: Dict[str, Any], email: str, display_name: str, age_band: str) -> Dict[str, Any]:
+    """Promote a local guest identity after the user supplies consented details."""
+    if not user.get("is_guest"):
+        return user
+    user.update({
+        "email": email.strip().lower(),
+        "display_name": display_name.strip(),
+        "age_band": age_band,
+        "roles": ["student"],
+        "account_status": "onboarding_incomplete",
+        "is_guest": False,
+        "mfa_verified": True,
+    })
+    add_entitlement(user["id"], "assessment.free.start", "account_creation", f"free:{user['id']}", quantity=1, granted_by="system")
+    return user
 
 
 def user_for_token(token: Optional[str]) -> Optional[Dict[str, Any]]:

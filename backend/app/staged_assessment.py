@@ -1,8 +1,8 @@
 """Adapt the local Dataset Lab catalog to the main assessment contract.
 
-The staged catalog is opt-in. It is useful for QA of the real visual, memory,
-and verbal records, but it remains research content and must never silently
-replace the reviewed bank in a production deployment.
+Local development may load this catalog so the main app can exercise the same
+visual, memory, and verbal records as Dataset Lab. It remains research content
+and must never replace the reviewed bank in a production deployment.
 """
 from __future__ import annotations
 
@@ -82,7 +82,11 @@ def _choice_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
     else:
         safe_options = [str(option) for option in options]
         safe_answer = safe_options[answer_index] if isinstance(answer_index, int) and 0 <= answer_index < len(safe_options) else ""
-        prompt = candidate.get("prompt") or "Choose the best answer."
+        # Keep the research passage in the helper/context area and put only
+        # the actual verbal question in the heading. The normalised prompt
+        # also contains the context, which would otherwise duplicate it in
+        # the student view.
+        prompt = candidate.get("question") or candidate.get("prompt") or "Choose the best answer."
     return {
         "id": candidate["id"],
         "item_family_id": candidate.get("item_family_id") or candidate["id"],

@@ -41,7 +41,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-For the local access workflow, copy `.env.example` to `.env` if desired and keep `IAQ_AUTH_MODE=development`. Open `/auth/login` and choose a seeded role. The student account has development assessment access; the guardian account can create a sandbox purchase for `demo-student`. Payment access is granted only after clicking the sandbox settlement action and receiving the server-confirmed `fulfilled` state.
+For the local access workflow, copy `.env.example` to `.env` if desired and keep `IAQ_AUTH_MODE=development`. The first visit opens the public site unsigned-in. Choose `Start test` to receive a browser-scoped guest session, or open `/auth/login` to use a seeded role or create a student account with the development email code. See [docs/TEST_ACCOUNTS.md](docs/TEST_ACCOUNTS.md) for the complete smoke-test flow. The student account has development assessment access; the guardian account can create a sandbox purchase for `demo-student`. Payment access is granted only after clicking the sandbox settlement action and receiving the server-confirmed `fulfilled` state.
 
 PostgreSQL (recommended for durable sessions and results):
 
@@ -85,15 +85,17 @@ For the machine-integrity report, run `python -m app.dataset_audit` from
 `backend/`. A clean audit still means “ready for human review,” not “ready for
 student use.”
 
-For local QA, the working Dataset Lab catalog can be used by the main assessment
-through an explicit opt-in. Keep the research folders under `data/assessment`,
-then set `IAQ_ASSESSMENT_SOURCE=staged` and
+For local QA, the main assessment uses the working Dataset Lab catalog by
+default. Keep the research folders under `data/assessment`; the equivalent
+explicit settings are `IAQ_ASSESSMENT_SOURCE=staged` and
 `IAQ_ALLOW_STAGED_ITEMS=true` in the backend environment. This combines the
 five visual/memory banks and English verbal research records with the authored
 processing-speed bank, preserves the 56-question balanced form, serves visual
 stimuli from the backend, and provides the ordered-sequence or cell-grid memory
 recall UI. This is QA-only: staged records remain unreviewed and must not be
-enabled in production or presented as official IQ content.
+enabled in production or presented as official IQ content. Production stays on
+the reviewed authored bank until the imported catalog has durable persistence
+and human approval.
 
 After applying the migrations, import the quarantined catalog into the
 server-side review tables with `python -m app.dataset_import` from `backend/`.

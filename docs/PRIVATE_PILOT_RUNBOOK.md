@@ -34,7 +34,7 @@ The key belongs in the backend/deployment environment only. Do not use `VITE_OPE
 
 ## Pilot question-bank gate
 
-The local preview currently contains 120 candidates per domain: 20 original pilot-baseline items and 100 deterministic generated candidates. Generated candidates are marked `AUTO_VERIFIED` in the authoritative lifecycle and are not human-reviewed production content.
+The local preview can run against the imported Dataset Lab catalog by setting `IAQ_ASSESSMENT_SOURCE=staged` and `IAQ_ALLOW_STAGED_ITEMS=true`. This uses the same five visual/memory banks and English verbal research records as the standalone lab, but keeps the records in QA-only process-local sessions because they remain unreviewed research content.
 
 Before a real pilot, complete two independent reviews for at least 100 items per domain, then enable:
 
