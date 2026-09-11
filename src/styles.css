@@ -496,6 +496,7 @@ body { overflow-x: hidden; }
 .result-score-head { display: flex; justify-content: space-between; align-items: end; gap: 20px; padding-bottom: 21px; border-bottom: 1px solid var(--line); }
 .result-score { margin-top: 9px; color: var(--ink); font: 500 66px/1 var(--mono); letter-spacing: -.09em; }
 .result-score span { color: var(--muted); font-size: 18px; letter-spacing: 0; }
+.score-method-note { display: block; margin-top: 10px; color: var(--muted); font: 11px/1.45 var(--mono); letter-spacing: .02em; }
 .result-meta { display: grid; gap: 8px; justify-items: end; color: var(--muted); font: 9px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
 .profile-distribution { margin-top: 27px; }
 .distribution-scale { display: flex; justify-content: space-between; padding-left: 177px; color: #9b9c93; font: 8px var(--mono); }

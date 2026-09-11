@@ -2,7 +2,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import pytest
 
-from app.domain import classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
+from app.domain import DOMAINS, classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
 from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseCreate, create_randomized_form, create_session, get_result, public_item, start_session, submit_response, submit_session
 
 
@@ -39,6 +39,20 @@ def test_provisional_signal_reports_observed_accuracy_without_synthetic_floor():
     )
     assert result.domain_scores["abstract_reasoning"] == 0
     assert result.composite is None
+    assert result.iq_score is None
+
+
+def test_experimental_iq_score_requires_complete_profile_and_uses_reference_transform():
+    item_domains = {f"{domain}-{index}": domain for domain in DOMAINS for index in range(4)}
+    item_keys = {item_id: "right" for item_id in item_domains}
+    responses = [{"item_id": item_id, "answer": "right", "response_time_ms": 4000} for item_id in item_domains]
+
+    result = score_domains(responses, item_domains, item_keys)
+
+    assert result.composite == 100
+    assert result.iq_score == 130
+    assert result.iq_score_kind == "experimental_iq_style_estimate"
+    assert result.iq_score_scale == "100_mean_15_sd_reference_only"
 
 
 def test_quality_flags_rapid_and_interruptions():

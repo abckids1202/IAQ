@@ -18,6 +18,16 @@ DOMAINS = (
     "processing_speed",
 )
 
+# This is deliberately a separate score track from the observed domain signals.
+# It uses the familiar 100/15 display convention as a user-facing reference,
+# but it is not derived from population norms, IRT parameters, or a validated
+# conversion table. Keep the label and method explicit anywhere it is shown.
+EXPERIMENTAL_IQ_SCORE_VERSION = "IAQ-IQ-EXPERIMENTAL-1"
+EXPERIMENTAL_IQ_SCORE_KIND = "experimental_iq_style_estimate"
+EXPERIMENTAL_IQ_SCORE_LABEL = "IAQ IQ score — experimental"
+EXPERIMENTAL_IQ_SCORE_SCALE = "100_mean_15_sd_reference_only"
+EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (seven_domain_mean * 0.60)"
+
 
 @dataclass(frozen=True)
 class ScoreResult:
@@ -32,6 +42,10 @@ class ScoreResult:
     score_version: str = "IAQ-PROVISIONAL-ACCURACY-1"
     score_kind: str = "provisional_domain_signal"
     norm_version: Optional[str] = None
+    iq_score: Optional[int] = None
+    iq_score_kind: str = EXPERIMENTAL_IQ_SCORE_KIND
+    iq_score_scale: str = EXPERIMENTAL_IQ_SCORE_SCALE
+    iq_score_method: str = EXPERIMENTAL_IQ_SCORE_METHOD
 
 
 def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mapping[str, str], item_keys: Mapping[str, str]) -> ScoreResult:
@@ -68,6 +82,11 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     answered = sum(pair[1] for pair in totals.values())
     interpretable_scores = [value for value in domain_scores.values() if isinstance(value, int)]
     composite = round(sum(interpretable_scores) / len(interpretable_scores)) if len(interpretable_scores) >= 2 else None
+    # An IQ-style number is withheld unless all seven domains have enough
+    # evidence. With no human calibration or age norms, this is only a
+    # transparent reference transform of the complete profile mean.
+    complete_profile = len(interpretable_scores) == len(DOMAINS)
+    iq_score = round(70 + (composite * 0.60)) if complete_profile and composite is not None else None
     warnings: List[str] = []
     if answered < 7:
         warnings.append("incomplete_assessment")
@@ -98,6 +117,10 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         score_version="IAQ-PROVISIONAL-ACCURACY-1",
         score_kind="provisional_domain_signal",
         norm_version=None,
+        iq_score=iq_score,
+        iq_score_kind=EXPERIMENTAL_IQ_SCORE_KIND,
+        iq_score_scale=EXPERIMENTAL_IQ_SCORE_SCALE,
+        iq_score_method=EXPERIMENTAL_IQ_SCORE_METHOD,
     )
 
 

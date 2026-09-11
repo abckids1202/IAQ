@@ -27,6 +27,13 @@ type ApiResult = {
   score_kind?: string
   norm_version?: string | null
   composite: number | null
+  iq_score?: number | null
+  iq_score_kind?: string
+  iq_score_label?: string
+  iq_score_version?: string
+  iq_score_scale?: string
+  iq_score_method?: string
+  official_iq_enabled?: boolean
   domain_scores: Record<string, number | null>
   domain_metrics: Record<string, { score: number | null; answered: number; correct: number; accuracy: number | null; median_response_time_ms: number | null; relative: string; interpretation_eligible?: boolean; evidence_note?: string }>
   confidence: string
@@ -86,6 +93,13 @@ function normalizeResult(result: ApiResult): AssessmentResult {
     scoreKind: result.score_kind,
     normVersion: result.norm_version,
     composite: result.composite,
+    iqScore: result.iq_score,
+    iqScoreKind: result.iq_score_kind,
+    iqScoreLabel: result.iq_score_label,
+    iqScoreVersion: result.iq_score_version,
+    iqScoreScale: result.iq_score_scale,
+    iqScoreMethod: result.iq_score_method,
+    officialIqEnabled: result.official_iq_enabled,
     domainScores,
     domainMetrics,
     confidence: result.confidence,

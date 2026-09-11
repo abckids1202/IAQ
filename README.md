@@ -2,7 +2,7 @@
 
 > Understand how you think. Discover where you could thrive.
 
-IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-direction assessment platform for high-school students. It is intentionally cautious: results are an **Experimental IAQ Composite**, not a clinical diagnosis or officially normed IQ score.
+IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-direction assessment platform for high-school students. It is intentionally cautious: results include an **IAQ IQ score · experimental** display value, not a clinical diagnosis or officially normed IQ score.
 
 ## What is included
 
@@ -57,6 +57,8 @@ psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/007_reports_i
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/008_private_pilot_quality.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/009_dataset_and_release_readiness.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/010_production_hardening.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/011_score_and_session_metadata.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/012_experimental_iq_score.sql
 cd backend
 $env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # PowerShell
 python -m app.seed

@@ -47,6 +47,7 @@ export type Profile = {
   strengths: Domain[]
   scores: Record<Domain, number | null>
   composite?: number | null
+  iqScore?: number | null
   confidence?: string
   lastResult?: AssessmentResult
 }
@@ -68,6 +69,13 @@ export type AssessmentResult = {
   scoreKind?: string
   normVersion?: string | null
   composite: number | null
+  iqScore?: number | null
+  iqScoreKind?: string
+  iqScoreLabel?: string
+  iqScoreVersion?: string
+  iqScoreScale?: string
+  iqScoreMethod?: string
+  officialIqEnabled?: boolean
   domainScores: Record<Domain, number | null>
   domainMetrics: Record<Domain, DomainResult>
   confidence: string

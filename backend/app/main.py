@@ -25,7 +25,19 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from .domain import DOMAINS, classify_session_quality, score_domains, score_riasec, major_fit, recommendation_confidence
+from .domain import (
+    DOMAINS,
+    EXPERIMENTAL_IQ_SCORE_KIND,
+    EXPERIMENTAL_IQ_SCORE_LABEL,
+    EXPERIMENTAL_IQ_SCORE_METHOD,
+    EXPERIMENTAL_IQ_SCORE_SCALE,
+    EXPERIMENTAL_IQ_SCORE_VERSION,
+    classify_session_quality,
+    score_domains,
+    score_riasec,
+    major_fit,
+    recommendation_confidence,
+)
 from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, REVIEWED_ITEMS_PER_DOMAIN, QUESTION_BANK, bank_counts, bank_is_ready, reviewed_counts, review_gate_ready
 from .persistence import PostgresAssessmentStore
 from . import access, ai, dataset_audit, email_delivery, evaluation, external_data, payments, review, supabase_auth
@@ -40,7 +52,7 @@ app.add_middleware(CORSMiddleware, allow_origins=_configured_origins, allow_orig
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 DURATION_SECONDS = 35 * 60
-SCORE_DISCLAIMER = "This is an experimental educational profile, not a clinical diagnosis or officially normed IQ score. It shows relative signals within this assessment only."
+SCORE_DISCLAIMER = "This IAQ IQ score is an experimental reference estimate, not an official, normed, clinical, or diagnostic IQ score. It uses a transparent transform of your complete seven-domain profile; no population percentile or age norm is used."
 
 ITEMS: Dict[str, Dict[str, Any]] = {
     "abs-01": {"id": "abs-01", "domain": "abstract_reasoning", "type": "choice", "prompt": "Each tile changes by the same rule. Which tile completes the sequence?", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
@@ -633,7 +645,7 @@ def me(request: Request) -> Dict[str, Any]:
 @app.get("/assessments")
 def assessments() -> List[Dict[str, Any]]:
     available_languages = sorted({item.get("language", "en") for item in ITEMS.values() if item.get("language")})
-    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "official_iq_enabled": False}]
+    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "iq_score_kind": EXPERIMENTAL_IQ_SCORE_KIND, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": EXPERIMENTAL_IQ_SCORE_SCALE, "iq_score_method": EXPERIMENTAL_IQ_SCORE_METHOD, "official_iq_enabled": False}]
 
 
 def create_session(assessment_id: str, payload: SessionCreate, request: Request = None) -> Dict[str, Any]:
@@ -895,7 +907,7 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
         value = score.domain_scores[domain]
         relative = "insufficient evidence" if value is None or score.composite is None else "stronger than your average" if value > score.composite + 3 else "lower than your average" if value < score.composite - 3 else "close to your average"
         domain_metrics[domain] = {**metric, "score": value, "relative": relative}
-    RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "score_kind": score.score_kind, "norm_version": score.norm_version, "composite": score.composite, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
+    RESULTS[result_id] = {"id": result_id, "session_id": session_id, "user_id": session.get("user_id"), "assessment_version": session["assessment_version"], "score_version": score.score_version, "score_kind": score.score_kind, "norm_version": score.norm_version, "composite": score.composite, "iq_score": score.iq_score, "iq_score_kind": score.iq_score_kind, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": score.iq_score_scale, "iq_score_method": score.iq_score_method, "official_iq_enabled": False, "domain_scores": score.domain_scores, "domain_metrics": domain_metrics, "confidence": score.confidence, "quality": quality, "answered_count": len(session["responses"]), "question_count": len(session["item_order"]), "duration_seconds": session["duration_seconds"], "completed_at": NOW(), "created_at": NOW(), "disclaimer": SCORE_DISCLAIMER, "access_tier": "summary"}
     if PERSISTENCE:
         PERSISTENCE.store_result_and_complete_session(session_id, RESULTS[result_id])
     else:
