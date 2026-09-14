@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { beginCheckout, beginSupabaseGoogle, createOrder, devLogin, finishSupabaseCallback, getCurrentUser, getOrderStatus, listProducts, logout, requestOtp, requestSupabaseOtp, settleMockPayment, supabaseConfigured, verifyOtp, verifySupabaseOtp, type AccessUser, type Order, type Product } from './api'
+import { beginSupabaseGoogle, createOrder, devLogin, finishSupabaseCallback, getCurrentUser, getOrderStatus, listProducts, logout, requestOtp, requestSupabaseOtp, startManualCheckout, submitPaymentProof, supabaseConfigured, verifyOtp, verifySupabaseOtp, type AccessUser, type Order, type Product, type QRISInfo } from './api'
 
 const demoAccounts = [
   { id: 'demo-student', label: 'Student preview', detail: 'Ari · assessment access' },
@@ -84,21 +84,52 @@ export function Checkout() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Checkout could not start.') } finally { setBusy(false) }
   }
   if (!product) return <div className="page commerce-page"><div className="panel"><div className="eyebrow">Checkout</div><h1>{error || 'Loading product…'}</h1><Link to="/pricing" className="text-button">Back to pricing ↗</Link></div></div>
-  return <div className="page commerce-page"><div className="compact-hero"><div><div className="eyebrow">Checkout / one-time access</div><h1>Confirm your<br /><em>IAQ access.</em></h1><p>We calculate the authoritative total on the server. The beneficiary receives the entitlement after payment verification.</p></div><Link className="button ghost" to="/pricing">Back to plans <span>←</span></Link></div><div className="checkout-grid"><form className="panel checkout-form" onSubmit={submit}><div className="eyebrow">Order details</div><h2>{product.name}</h2><label>Beneficiary user ID <input value={beneficiary} onChange={(event) => setBeneficiary(event.target.value)} placeholder="Leave blank for yourself" /><small>Guardians can use <code>demo-student</code> in development. Production checks the verified relationship server-side.</small></label><label className="check-row"><input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} /><span>I accept the IAQ terms, draft refund policy, and experimental-result notice.</span></label><button className="button primary" disabled={busy}>{busy ? 'Creating order…' : 'Continue to payment'} <span>→</span></button>{error && <p className="form-error" role="alert">{error}</p>}</form><aside className="panel order-summary"><div className="eyebrow">Order summary</div><div className="summary-line"><span>{product.name}</span><strong>{formatIDR(product.amount_minor)}</strong></div><div className="summary-line"><span>Discount</span><span>—</span></div><div className="summary-line"><span>Tax</span><span>—</span></div><div className="summary-total"><span>Total</span><strong>{formatIDR(product.amount_minor)}</strong></div><small>Currency: IDR · provider: sandbox/mock</small></aside></div></div>
+  return <div className="page commerce-page"><div className="compact-hero"><div><div className="eyebrow">Checkout / one-time access</div><h1>Confirm your<br /><em>IAQ access.</em></h1><p>We calculate the authoritative total on the server. Access is unlocked after manual QRIS proof review.</p></div><Link className="button ghost" to="/pricing">Back to plans <span>←</span></Link></div><div className="checkout-grid"><form className="panel checkout-form" onSubmit={submit}><div className="eyebrow">Order details</div><h2>{product.name}</h2><label>Beneficiary user ID <input value={beneficiary} onChange={(event) => setBeneficiary(event.target.value)} placeholder="Leave blank for yourself" /><small>Guardians can use <code>demo-student</code> in development. Production checks the verified relationship server-side.</small></label><label className="check-row"><input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} /><span>I accept the IAQ terms, draft refund policy, and experimental-result notice.</span></label><button className="button primary" disabled={busy}>{busy ? 'Creating order…' : 'Continue to payment'} <span>→</span></button>{error && <p className="form-error" role="alert">{error}</p>}</form><aside className="panel order-summary"><div className="eyebrow">Order summary</div><div className="summary-line"><span>{product.name}</span><strong>{formatIDR(product.amount_minor)}</strong></div><div className="summary-line"><span>Discount</span><span>—</span></div><div className="summary-line"><span>Tax</span><span>—</span></div><div className="summary-total"><span>Total</span><strong>{formatIDR(product.amount_minor)}</strong></div><small>Currency: IDR · manual BCA QRIS</small></aside></div></div>
 }
 
 export function PaymentPage() {
   const { orderId = '' } = useParams()
   const navigate = useNavigate()
   const [order, setOrder] = useState<Order | null>(null)
+  const [qris, setQris] = useState<QRISInfo | null>(null)
   const [message, setMessage] = useState('')
+  const [receipt, setReceipt] = useState<File | null>(null)
+  const [transactionRef, setTransactionRef] = useState('')
   const [busy, setBusy] = useState(true)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
-  const load = async () => { try { const status = await getOrderStatus(orderId); setOrder(status.order); if (status.order.status === 'fulfilled') setMessage('Access is active. The server created the entitlement.') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Payment status could not load.') } finally { setBusy(false) } }
-  useEffect(() => { beginCheckout(orderId).then((result) => { setOrder(result.order); setMessage(result.message) }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Checkout could not load.')).finally(() => setBusy(false)) }, [orderId])
-  const settle = async () => { setBusy(true); setError(''); try { await settleMockPayment(orderId); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Sandbox payment failed.') } finally { setBusy(false) } }
-  if (busy && !order) return <div className="page commerce-page"><div className="panel loading-card"><div className="eyebrow">Hosted checkout</div><h1>Preparing payment…</h1></div></div>
-  return <div className="page commerce-page"><div className="compact-hero"><div><div className="eyebrow">Payment / {order?.order_number || orderId.slice(0, 8)}</div><h1>{order?.status === 'fulfilled' ? <>You’re ready<br /><em>to begin.</em></> : <>Payment is<br /><em>waiting for you.</em></>}</h1><p>{order?.status === 'fulfilled' ? 'Your entitlement is active. Start the assessment when you are ready.' : 'This local checkout simulates a hosted Midtrans flow. The success button below sends a verified server-side sandbox event.'}</p></div><span className={`payment-status ${order?.status}`}>{order?.status || 'pending'}</span></div><div className="payment-grid"><section className="panel"><div className="eyebrow">Server-confirmed state</div><h2>{message || 'Payment received. We are confirming it with the payment provider.'}</h2><p>Browser redirects never grant access by themselves. IAQ waits for a verified provider event before creating the entitlement.</p>{order?.status === 'fulfilled' ? <button className="button primary" onClick={() => navigate('/assess')}>Start test <span>→</span></button> : <button className="button primary" onClick={settle} disabled={busy}>Complete sandbox payment <span>→</span></button>}{error && <p className="form-error" role="alert">{error}</p>}</section><aside className="panel order-summary"><div className="eyebrow">Order</div><div className="summary-line"><span>Product</span><strong>{order?.product_snapshot?.name}</strong></div><div className="summary-line"><span>Total</span><strong>{order ? formatIDR(order.total_minor) : '—'}</strong></div><div className="summary-line"><span>Access</span><span>{order?.status === 'fulfilled' ? 'Granted' : 'Not yet granted'}</span></div><Link to="/app/billing" className="text-button">View billing history ↗</Link></aside></div></div>
+  const load = async () => {
+    try {
+      const status = await getOrderStatus(orderId)
+      setOrder(status.order)
+      if (status.order.status === 'fulfilled') setMessage('Payment approved. Your paid features are now available.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Payment status could not load.') }
+    finally { setBusy(false) }
+  }
+  useEffect(() => {
+    startManualCheckout(orderId).then((result) => { setOrder(result.order); setQris(result.qris); setMessage(result.message) }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Checkout could not load.')).finally(() => setBusy(false))
+  }, [orderId])
+  useEffect(() => {
+    if (!order || order.status === 'fulfilled' || order.status === 'payment_proof_rejected') return
+    const timer = window.setInterval(() => { void load() }, 5000)
+    return () => window.clearInterval(timer)
+  }, [order?.status, orderId])
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!receipt) { setError('Choose your payment receipt first.'); return }
+    setUploading(true); setError('')
+    try {
+      await submitPaymentProof(orderId, receipt, transactionRef)
+      setMessage('Receipt submitted. We will review it before unlocking paid features.')
+      setReceipt(null)
+      await load()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Receipt could not be submitted.') }
+    finally { setUploading(false) }
+  }
+  if (busy && !order) return <div className="page commerce-page"><div className="panel loading-card"><div className="eyebrow">Manual QRIS checkout</div><h1>Preparing payment…</h1></div></div>
+  const imageUrl = qris?.image_url ? (qris.image_url.startsWith('http') ? qris.image_url : `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'}${qris.image_url}`) : null
+  const fulfilled = order?.status === 'fulfilled'
+  return <div className="page commerce-page"><div className="compact-hero"><div><div className="eyebrow">Payment / {order?.order_number || orderId.slice(0, 8)}</div><h1>{fulfilled ? <>You’re ready<br /><em>to explore.</em></> : <>Pay by QRIS.<br /><em>Send the proof.</em></>}</h1><p>{fulfilled ? 'Your entitlement is active. Continue to the interest check-in or directions.' : 'Scan the administrator’s BCA QRIS, pay the exact amount, then upload the receipt for manual review.'}</p></div><span className={'payment-status ' + (order?.status || 'pending')}>{order?.status || 'awaiting_payment'}</span></div><div className="payment-grid"><section className="panel manual-qris-card"><div className="eyebrow">Manual BCA QRIS · IDR 50,000</div>{imageUrl ? <img className="qris-image" src={imageUrl} alt={'IAQ QRIS payment code for ' + (qris?.merchant_name || 'IAQ')} /> : <div className="empty-state"><h2>QRIS is not configured yet.</h2><p>The administrator must upload the private QRIS image before payment can be submitted.</p></div>}<p>{qris?.instructions || 'Pay the exact order amount shown below. Keep your receipt.'}</p><div className="order-code"><span>IAQ order code</span><strong>{order?.order_number || '—'}</strong></div>{!fulfilled && <form className="payment-proof-form" onSubmit={submit}><label>Receipt image or PDF<input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setReceipt(event.target.files?.[0] || null)} required /><small>Maximum 5 MB. Your receipt stays private.</small></label><label>Transaction reference (optional)<input value={transactionRef} onChange={(event) => setTransactionRef(event.target.value)} placeholder="Bank reference or note" /></label><button className="button primary" disabled={uploading || !qris?.image_available}>{uploading ? 'Submitting proof…' : 'Submit payment proof'} <span>→</span></button></form>}{message && <p className="payment-message" role="status">{message}</p>}{error && <p className="form-error" role="alert">{error}</p>}</section><aside className="panel order-summary"><div className="eyebrow">Order status</div><div className="summary-line"><span>Product</span><strong>{order?.product_snapshot?.name}</strong></div><div className="summary-line"><span>Total</span><strong>{order ? formatIDR(order.total_minor) : '—'}</strong></div><div className="summary-line"><span>Review</span><span>{order?.status === 'proof_submitted' ? 'Under review' : fulfilled ? 'Approved' : order?.status === 'payment_proof_rejected' ? 'Rejected — resubmit' : 'Awaiting proof'}</span></div>{fulfilled && <button className="button primary full" onClick={() => navigate('/interests')}>Complete interest check-in <span>→</span></button>}<Link to="/app/billing" className="text-button">View billing history ↗</Link></aside></div></div>
 }
 
 export function Billing() {

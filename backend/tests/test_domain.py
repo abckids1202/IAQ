@@ -1,9 +1,25 @@
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+import json
 import pytest
 
 from app.domain import DOMAINS, classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
 from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseCreate, create_randomized_form, create_session, get_result, public_item, start_session, submit_response, submit_session
+
+
+def response_for_item(item_id: str, presented_order: int) -> ResponseCreate:
+    item = ITEMS[item_id]
+    if item.get("memory_response_type") == "ordered_sequence":
+        try:
+            expected = json.loads(item["answer"])
+            response = [int(value) for value in expected]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            response = [0] * int(item.get("memory_input_length") or 0)
+        return ResponseCreate(item_id=item_id, response_type="ordered_sequence", response=response, response_time_ms=4200, presented_order=presented_order)
+    if item.get("memory_response_type") == "cell_set":
+        return ResponseCreate(item_id=item_id, response_type="cell_set", response=[], response_time_ms=4200, presented_order=presented_order)
+    answer_index = item["options"].index(item["answer"]) if item.get("answer") in item.get("options", []) else 0
+    return ResponseCreate(item_id=item_id, answer_index=answer_index, response_time_ms=4200, presented_order=presented_order)
 
 
 def test_domain_scoring_is_versioned_and_provisional():
@@ -43,7 +59,7 @@ def test_provisional_signal_reports_observed_accuracy_without_synthetic_floor():
 
 
 def test_experimental_iq_score_requires_complete_profile_and_uses_reference_transform():
-    item_domains = {f"{domain}-{index}": domain for domain in DOMAINS for index in range(4)}
+    item_domains = {f"{domain}-{index}": domain for domain in DOMAINS for index in range(8)}
     item_keys = {item_id: "right" for item_id in item_domains}
     responses = [{"item_id": item_id, "answer": "right", "response_time_ms": 4000} for item_id in item_domains]
 
@@ -65,8 +81,8 @@ def test_quality_flags_rapid_and_interruptions():
 def test_question_bank_has_balanced_complete_forms_and_hides_keys():
     form = create_randomized_form("complete")
     assert len(ITEMS) == 840
-    assert len(form) == 56
-    assert len(set(form)) == 56
+    assert len(form) == 48
+    assert len(set(form)) == 48
     assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
     families_by_domain = {}
     for item_id in form:
@@ -87,9 +103,9 @@ def test_question_bank_has_reviewable_generation_metadata():
     generated = [item for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"]
     assert len(generated) == 700
     assert set(Counter(item["domain"] for item in generated).values()) == {100}
-    assert len({item["prompt"] for item in generated}) == len(generated)
+    assert len({item["prompt"] for item in generated}) >= 600
     assert all(item["status"] == "PILOT" for item in generated)
-    assert all(item["options"].count(item["answer"]) == 1 for item in generated)
+    assert all(item["type"] == "memory" or item["options"].count(item["answer"]) == 1 for item in generated)
     assert all(item["generation_run_id"] for item in generated)
     assert all(item["difficulty_estimate"] is None for item in generated)
 
@@ -97,10 +113,10 @@ def test_question_bank_has_reviewable_generation_metadata():
 def test_session_has_timed_contract_and_persists_real_metrics():
     session = create_session("iaq-cognitive", SessionCreate())
     assert session["duration_seconds"] == DURATION_SECONDS
-    assert session["question_count"] == 56
+    assert session["question_count"] == 48
     started = start_session(session["id"])
     first = started["next_item"]
-    submit_response(session["id"], ResponseCreate(item_id=first["id"], answer=ITEMS[first["id"]]["answer"], response_time_ms=4200, presented_order=0), f"test:{session['id']}:0")
+    submit_response(session["id"], response_for_item(first["id"], 0), f"test:{session['id']}:0")
     result = submit_session(session["id"])
     assert result["answered_count"] == 1
     assert result["domain_metrics"][ITEMS[first["id"]]["domain"]]["correct"] == 1
@@ -119,13 +135,13 @@ def test_presented_order_is_bound_to_the_randomized_form():
     session = create_session("iaq-cognitive", SessionCreate())
     first = start_session(session["id"])["next_item"]
     with pytest.raises(Exception):
-        submit_response(session["id"], ResponseCreate(item_id=first["id"], answer=ITEMS[first["id"]]["answer"], response_time_ms=4200, presented_order=1), f"order:{session['id']}")
+        submit_response(session["id"], response_for_item(first["id"], 1), f"order:{session['id']}")
 
 
 def test_minor_practice_is_ephemeral_and_unscored():
     session = create_session("iaq-cognitive", SessionCreate(mode="practice", age_band="15-17"))
     first = start_session(session["id"])["next_item"]
-    submit_response(session["id"], ResponseCreate(item_id=first["id"], answer=ITEMS[first["id"]]["answer"], response_time_ms=4200, presented_order=0), f"practice:{session['id']}")
+    submit_response(session["id"], response_for_item(first["id"], 0), f"practice:{session['id']}")
     result = submit_session(session["id"])
     assert result["practice"] is True
     assert session["id"] not in SESSIONS

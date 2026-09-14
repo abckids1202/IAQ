@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -52,7 +52,15 @@ app.add_middleware(CORSMiddleware, allow_origins=_configured_origins, allow_orig
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 DURATION_SECONDS = 35 * 60
-SCORE_DISCLAIMER = "This IAQ IQ score is an experimental reference estimate, not an official, normed, clinical, or diagnostic IQ score. It uses a transparent transform of your complete seven-domain profile; no population percentile or age norm is used."
+QUESTION_COUNT = 48
+DOMAIN_QUOTA = 8
+SCORE_DISCLAIMER = "This IAQ IQ score is an experimental, non-normed reference estimate, not an official, clinical, diagnostic, or population IQ score. It uses a transparent transform of your complete six-domain profile; no percentile or age norm is used. Timing is shown as context and does not change the score."
+VISUAL_PROMPTS = {
+    "abstract_reasoning": "Which panel completes the pattern?",
+    "deductive_logic": "Which conclusion must be true?",
+    "numerical_reasoning": "Which option completes the sequence?",
+    "visual_spatial_reasoning": "Which arrangement matches after rotation?",
+}
 
 ITEMS: Dict[str, Dict[str, Any]] = {
     "abs-01": {"id": "abs-01", "domain": "abstract_reasoning", "type": "choice", "prompt": "Each tile changes by the same rule. Which tile completes the sequence?", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
@@ -78,6 +86,10 @@ RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
 SAVED_MAJORS: Dict[str, List[str]] = {}
 REPORT_DELIVERIES: Dict[str, Dict[str, Any]] = {}
+PAYMENT_PROOFS: Dict[str, Dict[str, Any]] = {}
+QRIS_SETTINGS: Dict[str, Any] = {"merchant_name": os.getenv("QRIS_MERCHANT_NAME", "IAQ"), "instructions": "Scan the QRIS, pay the exact amount, then upload your receipt.", "image_filename": None, "image_bytes": None, "image_content_type": None}
+RESULT_IDENTITIES: Dict[str, Dict[str, Any]] = {}
+MEMORY_RECALL_STARTED: Dict[str, bool] = {}
 FEEDBACK: List[Dict[str, Any]] = []
 AI_INSIGHTS: Dict[str, Dict[str, Any]] = {}
 AI_OUTPUTS: Dict[str, Dict[str, Any]] = {}
@@ -107,18 +119,21 @@ INTEREST_ITEMS = [
 
 
 class SessionCreate(BaseModel):
-    assessment_version: str = "IAQ-COG-0.3"
+    assessment_version: str = "IAQ-COG-0.4"
     mode: str = Field(default="complete", pattern="^(quick|complete|practice)$")
     # The language is locked into the session. The current production bank is
     # English-only; Indonesian sessions stay blocked until a separately
     # authored and reviewed item version is available.
     language: str = Field(default="en", pattern="^(en|id)$")
-    age_band: str = Field(default="adult", pattern="^(15-17|18-22|adult|unknown)$")
+    age_band: str = Field(default="18-22", pattern="^(15-17|18-22|adult|unknown)$")
 
 
 class ResponseCreate(BaseModel):
     item_id: str
-    answer: str
+    answer: Optional[str] = None
+    answer_index: Optional[int] = Field(default=None, ge=0, le=3)
+    response_type: Optional[str] = Field(default=None, pattern="^(ordered_sequence|cell_set)$")
+    response: Optional[List[int]] = None
     response_time_ms: int = Field(default=10000, ge=0, le=3600000)
     presented_order: int = Field(default=0, ge=0)
 
@@ -192,6 +207,10 @@ class OrderCreate(BaseModel):
     school_id: Optional[str] = Field(default=None, min_length=2, max_length=120)
 
 
+class PaymentProofDecision(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
 class ConsentRecordCreate(BaseModel):
     consent_version: str = Field(min_length=1, max_length=80)
     purpose: str = Field(min_length=1, max_length=120)
@@ -199,6 +218,7 @@ class ConsentRecordCreate(BaseModel):
 
 
 class IdentityCaptureCreate(BaseModel):
+    result_id: Optional[str] = Field(default=None, min_length=8, max_length=80)
     email: str = Field(min_length=5, max_length=254)
     display_name: str = Field(min_length=2, max_length=120)
     age_band: str = Field(pattern="^(15-17|18-22|adult|unknown)$")
@@ -276,8 +296,12 @@ def serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
 
 def public_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Return a strict student payload; internal provenance never leaves the API."""
-    allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type", "image_url", "memory_response_type", "memory_input_length", "memory_grid_size"}
+    allowed = {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type", "image_url", "memory_response_type", "memory_input_length", "memory_grid_size", "memory_recall_started", "presentation_mode"}
     payload = {key: value for key, value in item.items() if key in allowed and value is not None}
+    if item.get("domain") in VISUAL_PROMPTS:
+        payload["prompt"] = VISUAL_PROMPTS[item["domain"]]
+        payload["options"] = ["A", "B", "C", "D"]
+        payload["presentation_mode"] = "visual_labels"
     if item.get("type") == "memory":
         # The transient stimulus is necessary to run delayed recall. It is
         # not the answer key and is never returned as `answer`/`answer_index`.
@@ -327,24 +351,48 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     per_domain = 8 if mode == "complete" else 2
     staged_default = "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false"
     allow_staged = ASSESSMENT_SOURCE == "staged" and os.getenv("IAQ_ALLOW_STAGED_ITEMS", staged_default).lower() == "true" and os.getenv("IAQ_ENV", "development").lower() != "production"
-    eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and (item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"} or (allow_staged and item.get("data_origin") in {"IAQ_GENERATED_RESEARCH_DATA", "EXTERNAL_RESEARCH_DATA"}))]
+    def structurally_valid(item: Dict[str, Any]) -> bool:
+        domain = item.get("domain")
+        if domain not in DOMAINS or not item.get("id") or not item.get("answer") or item.get("memory_protocol_incomplete"):
+            return False
+        if domain in VISUAL_PROMPTS:
+            has_four_options = isinstance(item.get("options"), list) and len(item["options"]) == 4
+            # The imported Dataset Lab and any production release must carry
+            # a complete visual stimulus. The small original authored bank is
+            # retained only as a local API smoke-test fallback; it predates
+            # image-backed visual records and may use text options instead.
+            legacy_smoke_item = (
+                ASSESSMENT_SOURCE != "staged"
+                and item.get("data_origin") in {"REVIEWED_CONTENT", "ORIGINAL_GENERATED"}
+                and not item.get("image_url")
+            )
+            return has_four_options and (bool(item.get("image_url")) or legacy_smoke_item)
+        if item.get("type") == "memory":
+            response_type = item.get("memory_response_type")
+            answer = item.get("answer")
+            return response_type in {"ordered_sequence", "cell_set"} and bool(item.get("memory_input_length")) and answer not in {None, "", "[]"}
+        return isinstance(item.get("options"), list) and len(item["options"]) == 4
+
+    eligible_items = [item for item in ITEMS.values() if structurally_valid(item) and item.get("language", "en") == language and (item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"} or (allow_staged and item.get("data_origin") in {"IAQ_GENERATED_RESEARCH_DATA", "EXTERNAL_RESEARCH_DATA"}))]
     # The local development preview can still exercise the full assessment
     # contract while the generated reserve is awaiting human review. This
     # fallback is deliberately disabled whenever the pilot review gate is on.
     family_ready = all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS)
     if (not eligible_items or not family_ready) and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true" and not allow_staged:
-        eligible_items = [item for item in ITEMS.values() if item.get("language", "en") == language and item.get("status") in {"PILOT", "ACTIVE"}]
+        eligible_items = [item for item in ITEMS.values() if structurally_valid(item) and item.get("language", "en") == language and item.get("status") in {"PILOT", "ACTIVE"}]
     if os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true" and mode != "practice":
         eligible_items = [item for item in eligible_items if review.review_summary(item)["review_ready"]]
         if not review_gate_ready(eligible_items):
             raise HTTPException(503, "The question-bank review gate requires 100 eligible reviewed items per domain")
         if not all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS):
             raise HTTPException(503, "The reviewed question bank does not yet contain enough distinct item families for a form")
-    if not bank_is_ready(eligible_items):
+    if not bank_is_ready(eligible_items, minimum_per_domain=per_domain):
         raise HTTPException(503, "The reviewed question bank has not reached the pilot gate yet")
     pools: Dict[str, List[str]] = {domain: [] for domain in DOMAINS}
     for item in eligible_items:
         pools[item["domain"]].append(item["id"])
+    if any(len(pools[domain]) < per_domain for domain in DOMAINS):
+        raise HTTPException(503, f"The eligible question bank does not contain {per_domain} valid items in every scored domain")
     rng = random.SystemRandom()
     selected: List[str] = []
     for domain in DOMAINS:
@@ -377,7 +425,6 @@ def runtime_readiness() -> Dict[str, Any]:
     payments_enabled = os.getenv("PAYMENTS_ENABLED", "true").lower() == "true"
     require_reviewed_items = os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true"
     guardian_consent_required = os.getenv("GUARDIAN_CONSENT_REQUIRED", "true").lower() == "true"
-    midtrans_live = os.getenv("MIDTRANS_IS_PRODUCTION", "false").lower() == "true" and os.getenv("MIDTRANS_LIVE_ENABLED", "false").lower() == "true"
     checks = {
         "database": bool(PERSISTENCE) if production or os.getenv("IAQ_REQUIRE_PERSISTENCE", "false").lower() == "true" else True,
         "commerce_persistence": bool(PERSISTENCE) and access.POSTGRES_ACCESS_STORE_READY and os.getenv("IAQ_ACCESS_STORE", "memory").lower() == "postgres" if production else True,
@@ -389,7 +436,7 @@ def runtime_readiness() -> Dict[str, Any]:
         # lifecycle-only check could report ready while no reviewer approvals
         # existed.
         "review_gate": (bool(review.review_counts(ITEMS.values())) and review_gate_ready()) if production or require_reviewed_items else True,
-        "payments": (not payments_enabled) or (bool(os.getenv("MIDTRANS_SERVER_KEY")) and (not production or midtrans_live)) if production else True,
+        "payments": (not payments_enabled) or (bool(QRIS_SETTINGS["image_bytes"]) and os.getenv("IAQ_FULL_REPORT_PRICE_IDR", "50000").isdigit()) if production else True,
         "email": bool(os.getenv("RESEND_API_KEY")) if production else True,
         "app_base_url": bool(os.getenv("APP_BASE_URL")) if production else True,
     }
@@ -399,7 +446,7 @@ def runtime_readiness() -> Dict[str, Any]:
         "status": "ready" if not blockers else "needs_configuration",
         "checks": checks,
         "blockers": blockers,
-        "payment_provider": payments.provider_name(),
+        "payment_provider": "manual_qris",
         "auth_mode": auth_mode,
         "student_sessions": "reviewed_bank_only" if require_reviewed_items else "development_pilot_bank",
         "note": "A ready response means configuration checks passed; it does not replace merchant, privacy, psychometric, or security approval.",
@@ -421,7 +468,7 @@ def auth_config() -> Dict[str, Any]:
         "payments_enabled": os.getenv("PAYMENTS_ENABLED", "true").lower() == "true",
         "guest_enabled": os.getenv("IAQ_GUEST_ASSESSMENT_ENABLED", "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false").lower() == "true",
         "guest_requires_account_for_saved_reports": True,
-        "payment_provider": "midtrans" if os.getenv("MIDTRANS_SERVER_KEY") else "mock",
+        "payment_provider": "manual_qris",
         "production_ready": runtime_readiness()["status"] == "ready" and os.getenv("IAQ_ENV", "development").lower() == "production",
         "readiness": runtime_readiness(),
     }
@@ -509,7 +556,7 @@ def me_orders(request: Request) -> Dict[str, Any]:
 
 @app.get("/products")
 def products() -> Dict[str, Any]:
-    return {"products": access.list_products(), "currency": "IDR", "payment_provider": "midtrans_sandbox" if os.getenv("MIDTRANS_SERVER_KEY") else "mock"}
+    return {"products": access.list_products(), "currency": "IDR", "payment_provider": "manual_qris"}
 
 
 @app.get("/products/{product_id}")
@@ -558,17 +605,105 @@ def checkout_order(order_id: str, request: Request) -> Dict[str, Any]:
         return {"order": serialize_order(order), "payment_attempt": None, "message": "Access is already active."}
     if os.getenv("PAYMENTS_ENABLED", "true").lower() != "true":
         raise HTTPException(503, "Payments are not enabled")
-    if os.getenv("IAQ_ENV", "development").lower() == "production" and payments.provider_name() != "midtrans":
-        raise HTTPException(503, "Production checkout requires Midtrans configuration")
     attempt = access.create_payment_attempt(order_id)
-    if payments.provider_name() == "midtrans":
-        try:
-            attempt.update(payments.midtrans_snap(order, user))
-            attempt["provider"] = "midtrans"
-            attempt["updated_at"] = NOW()
-        except Exception as error:
-            raise HTTPException(502, f"Midtrans checkout could not be created: {error}") from error
-    return {"order": serialize_order(order), "payment_attempt": attempt, "message": "Complete payment in the hosted checkout. The browser redirect does not grant access."}
+    attempt["provider"] = "manual_qris"
+    attempt["updated_at"] = NOW()
+    return {"order": serialize_order(order), "payment_attempt": attempt, "qris": {"merchant_name": QRIS_SETTINGS["merchant_name"], "instructions": QRIS_SETTINGS["instructions"], "image_available": bool(QRIS_SETTINGS["image_bytes"]), "image_url": "/payment-settings/qris/image" if QRIS_SETTINGS["image_bytes"] else None}, "message": "Scan the QRIS, pay the exact amount, then upload your receipt. Access is unlocked only after admin verification."}
+
+
+@app.get("/payment-settings/qris")
+def qris_settings() -> Dict[str, Any]:
+    return {"merchant_name": QRIS_SETTINGS["merchant_name"], "instructions": QRIS_SETTINGS["instructions"], "image_available": bool(QRIS_SETTINGS["image_bytes"]), "image_url": "/payment-settings/qris/image" if QRIS_SETTINGS["image_bytes"] else None}
+
+
+@app.get("/payment-settings/qris/image")
+def qris_image() -> Response:
+    if not QRIS_SETTINGS["image_bytes"]:
+        raise HTTPException(404, "QRIS image is not configured")
+    return Response(content=QRIS_SETTINGS["image_bytes"], media_type=QRIS_SETTINGS["image_content_type"] or "image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.post("/orders/{order_id}/payment-proof")
+async def submit_payment_proof(order_id: str, receipt: UploadFile = File(...), transaction_ref: Optional[str] = None, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"), request: Request = None) -> Dict[str, Any]:
+    order = access.ORDERS.get(order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    user = current_user(request)
+    _authorized_order(order, user)
+    if order["purchaser_user_id"] != user["id"] and "platform_admin" not in user.get("roles", []):
+        raise HTTPException(403, "Only the purchaser can submit payment proof")
+    if order["status"] == "fulfilled":
+        return {"accepted": True, "status": "fulfilled", "order_id": order_id}
+    if receipt.content_type not in {"image/png", "image/jpeg", "image/webp", "application/pdf"}:
+        raise HTTPException(415, "Upload a PNG, JPG, WEBP, or PDF receipt")
+    if idempotency_key and idempotency_key in PAYMENT_PROOFS:
+        return {"accepted": True, **{key: value for key, value in PAYMENT_PROOFS[idempotency_key].items() if key != "content"}}
+    content = await receipt.read(5 * 1024 * 1024 + 1)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Payment receipts must be 5 MB or smaller")
+    proof_id = str(uuid4())
+    proof = {"id": proof_id, "order_id": order_id, "user_id": user["id"], "filename": receipt.filename or "receipt", "content_type": receipt.content_type, "size": len(content), "transaction_ref": (transaction_ref or "").strip()[:120] or None, "status": "under_review", "note": "", "created_at": NOW(), "updated_at": NOW(), "content": content}
+    PAYMENT_PROOFS[idempotency_key or f"proof:{proof_id}"] = proof
+    order["status"] = "proof_submitted"
+    order["updated_at"] = NOW()
+    access.record_audit(user["id"], "payment.proof_submitted", "order", order_id, {"proof_id": proof_id})
+    return {"accepted": True, "id": proof_id, "order_id": order_id, "status": proof["status"], "created_at": proof["created_at"]}
+
+
+@app.get("/admin/payment-proofs")
+def admin_payment_proofs(request: Request) -> Dict[str, Any]:
+    require_permission(current_user(request), "admin.payments.read")
+    return {"proofs": [{key: value for key, value in proof.items() if key != "content"} for proof in PAYMENT_PROOFS.values()]}
+
+
+@app.post("/admin/payment-proofs/{proof_id}/approve")
+def approve_payment_proof(proof_id: str, payload: PaymentProofDecision, request: Request) -> Dict[str, Any]:
+    admin = current_user(request)
+    require_permission(admin, "admin.entitlements.manage")
+    proof = next((value for value in PAYMENT_PROOFS.values() if value["id"] == proof_id), None)
+    if not proof:
+        raise HTTPException(404, "Payment proof not found")
+    if proof["status"] == "approved":
+        return {"approved": True, "order": serialize_order(access.ORDERS[proof["order_id"]])}
+    if proof["status"] != "under_review":
+        raise HTTPException(409, "This payment proof is no longer awaiting review")
+    order = access.ORDERS[proof["order_id"]]
+    proof.update({"status": "approved", "note": payload.note, "reviewed_by": admin["id"], "updated_at": NOW()})
+    access.fulfill_order(order["id"], "manual_qris_admin_verified")
+    access.record_audit(admin["id"], "payment.proof_approved", "payment_proof", proof_id, {"order_id": order["id"]})
+    return {"approved": True, "order": serialize_order(order)}
+
+
+@app.post("/admin/payment-proofs/{proof_id}/reject")
+def reject_payment_proof(proof_id: str, payload: PaymentProofDecision, request: Request) -> Dict[str, Any]:
+    admin = current_user(request)
+    require_permission(admin, "admin.entitlements.manage")
+    proof = next((value for value in PAYMENT_PROOFS.values() if value["id"] == proof_id), None)
+    if not proof:
+        raise HTTPException(404, "Payment proof not found")
+    if proof["status"] == "rejected":
+        return {"rejected": True, "status": proof["status"]}
+    if proof["status"] != "under_review":
+        raise HTTPException(409, "This payment proof is no longer awaiting review")
+    proof.update({"status": "rejected", "note": payload.note, "reviewed_by": admin["id"], "updated_at": NOW()})
+    access.ORDERS[proof["order_id"]]["status"] = "payment_proof_rejected"
+    access.ORDERS[proof["order_id"]]["updated_at"] = NOW()
+    access.record_audit(admin["id"], "payment.proof_rejected", "payment_proof", proof_id, {"order_id": proof["order_id"]})
+    return {"rejected": True, "status": proof["status"], "note": proof["note"]}
+
+
+@app.post("/admin/payment-settings/qris")
+async def update_qris_settings(merchant_name: str, instructions: str, image: UploadFile = File(...), request: Request = None) -> Dict[str, Any]:
+    admin = current_user(request)
+    require_permission(admin, "admin.products.manage")
+    if image.content_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise HTTPException(415, "QRIS must be a PNG, JPG, or WEBP image")
+    content = await image.read(2 * 1024 * 1024 + 1)
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(413, "QRIS images must be 2 MB or smaller")
+    QRIS_SETTINGS.update({"merchant_name": merchant_name.strip()[:120] or "IAQ", "instructions": instructions.strip()[:500] or "Scan the QRIS, pay the exact amount, then upload your receipt.", "image_filename": image.filename, "image_bytes": content, "image_content_type": image.content_type})
+    access.record_audit(admin["id"], "payment.qris_updated", "payment_settings", "qris", {})
+    return qris_settings()
 
 
 @app.get("/orders/{order_id}/status")
@@ -675,7 +810,7 @@ def me(request: Request) -> Dict[str, Any]:
 @app.get("/assessments")
 def assessments() -> List[Dict[str, Any]]:
     available_languages = sorted({item.get("language", "en") for item in ITEMS.values() if item.get("language")})
-    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.3", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": 56, "questions_per_quick_form": 14, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": 8, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "iq_score_kind": EXPERIMENTAL_IQ_SCORE_KIND, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": EXPERIMENTAL_IQ_SCORE_SCALE, "iq_score_method": EXPERIMENTAL_IQ_SCORE_METHOD, "official_iq_enabled": False}]
+    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.4", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": QUESTION_COUNT, "questions_per_quick_form": len(DOMAINS) * 2, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": DOMAIN_QUOTA, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "iq_score_kind": EXPERIMENTAL_IQ_SCORE_KIND, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": EXPERIMENTAL_IQ_SCORE_SCALE, "iq_score_method": EXPERIMENTAL_IQ_SCORE_METHOD, "official_iq_enabled": False}]
 
 
 def create_session(assessment_id: str, payload: SessionCreate, request: Request = None) -> Dict[str, Any]:
@@ -691,8 +826,8 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
         trusted_age_band = payload.age_band
     if (payload.age_band == "15-17" or trusted_age_band == "15-17") and payload.mode != "practice":
         raise HTTPException(403, "People aged 15–17 can use practice mode until guardian consent is available")
-    if payload.mode != "practice" and os.getenv("IAQ_REQUIRE_VERIFIED_AGE", "false").lower() == "true" and trusted_age_band not in {"18-22", "adult"}:
-        raise HTTPException(403, "A verified adult age band is required before a scored pilot session")
+    if payload.mode != "practice" and payload.age_band != "18-22":
+        raise HTTPException(403, "The scored pilot is currently available only for ages 18–22")
     if payload.language == "id" and not any(item.get("language", "en") == "id" for item in ITEMS.values()):
         raise HTTPException(503, "The Indonesian assessment version is not released yet; choose English for this pilot")
     access_code = "assessment.complete.start" if access.has_entitlement(user["id"], "assessment.complete.start") else "assessment.free.start"
@@ -711,7 +846,7 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
         PERSISTENCE.create_session(session)
     else:
         SESSIONS[session_id] = session
-    return {"id": session_id, "assessment_version": payload.assessment_version, "language": payload.language, "age_band": payload.age_band, "mode": payload.mode, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": 8 if payload.mode == "complete" else 2, "practice": session["ephemeral"]}
+    return {"id": session_id, "assessment_version": payload.assessment_version, "language": payload.language, "age_band": payload.age_band, "mode": payload.mode, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": DOMAIN_QUOTA if payload.mode == "complete" else 2, "practice": session["ephemeral"]}
 
 
 @app.post("/assessments/{assessment_id}/sessions")
@@ -772,8 +907,41 @@ def next_item(session_id: str, request: Request = None) -> Dict[str, Any]:
         return {"complete": True, "expired": True}
     for item_id in session["item_order"]:
         if item_id not in session["responses"]:
-            return public_item(ITEMS[item_id])
+            safe = public_item(ITEMS[item_id])
+            if MEMORY_RECALL_STARTED.get(f"{session_id}:{item_id}"):
+                safe.pop("visual", None)
+                safe["memory_recall_started"] = True
+            return safe
     return {"complete": True}
+
+
+@app.post("/sessions/{session_id}/items/{item_id}/begin-recall")
+def begin_memory_recall(session_id: str, item_id: str, request: Request = None) -> Dict[str, Any]:
+    """Advance a memory item to recall without exposing its answer.
+
+    The Dataset Lab and the student assessment use the same one-way protocol:
+    once recall begins, the study stimulus is never returned again for that
+    item. The server records the transition so a refresh cannot replay it.
+    """
+    session = session_for(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    require_session_owner(session, request)
+    if session.get("status") in {"complete", "timed_out"} or session_expired(session):
+        raise HTTPException(409, "Assessment time has ended")
+    item = ITEMS.get(item_id)
+    if not item or item_id not in session.get("item_order", []):
+        raise HTTPException(404, "Memory item not found")
+    response_type = item.get("memory_response_type")
+    if item.get("type") != "memory" or response_type not in {"ordered_sequence", "cell_set"}:
+        raise HTTPException(422, "This item does not use a memory recall protocol")
+    recall_key = f"recall_started:{item_id}"
+    if recall_key not in session.setdefault("events", {}):
+        session["events"][recall_key] = NOW()
+        MEMORY_RECALL_STARTED[f"{session_id}:{item_id}"] = True
+        if ASSESSMENT_PERSISTENCE and not session.get("ephemeral"):
+            PERSISTENCE.insert_event(session_id, str(uuid4()), "memory_recall_started", {"item_id": item_id})
+    return {"item_id": item_id, "response_type": response_type, "input_length": item.get("memory_input_length"), "grid_size": item.get("memory_grid_size"), "labels": {"begin": "Begin recall", "submit": "Check recall"}}
 
 
 @app.post("/sessions/{session_id}/responses")
@@ -796,9 +964,12 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
     expected_order = session["item_order"].index(payload.item_id)
     if payload.presented_order != expected_order:
         raise HTTPException(422, "The item order does not match this assessment session")
+    stored_answer = payload.answer
     if item.get("memory_response_type") in {"ordered_sequence", "cell_set"}:
+        if payload.response_type and payload.response_type != item.get("memory_response_type"):
+            raise HTTPException(422, "Memory response type does not match this item")
         try:
-            memory_response = json.loads(payload.answer)
+            memory_response = payload.response if payload.response is not None else json.loads(payload.answer or "")
         except (TypeError, json.JSONDecodeError) as error:
             raise HTTPException(422, "Memory response is not valid JSON") from error
         if not isinstance(memory_response, list) or any(not isinstance(value, int) or isinstance(value, bool) for value in memory_response):
@@ -811,13 +982,20 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
             valid_memory_response = len(memory_response) == len(set(memory_response)) and all(0 <= value < max_cell for value in memory_response)
         if not valid_memory_response:
             raise HTTPException(422, "Memory response is outside the allowed format")
+        stored_answer = json.dumps(memory_response, separators=(",", ":"))
     elif payload.answer not in item["options"]:
-        raise HTTPException(422, "Answer option is unavailable")
+        if payload.answer_index is None or payload.answer_index >= len(item["options"]):
+            raise HTTPException(422, "Answer option is unavailable")
+        stored_answer = item["options"][payload.answer_index]
+    elif payload.answer_index is not None:
+        if payload.answer_index >= len(item["options"]):
+            raise HTTPException(422, "Answer option is unavailable")
+        stored_answer = item["options"][payload.answer_index]
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
-    response = {"item_id": payload.item_id, "answer": payload.answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
+    response = {"item_id": payload.item_id, "answer": stored_answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
     if ASSESSMENT_PERSISTENCE and not session.get("ephemeral"):
-        accepted = PERSISTENCE.insert_response(session_id, payload.item_id, payload.answer, payload.response_time_ms, payload.presented_order, idempotency_key)
+        accepted = PERSISTENCE.insert_response(session_id, payload.item_id, stored_answer or "", payload.response_time_ms, payload.presented_order, idempotency_key)
         if not accepted:
             return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     else:
@@ -872,21 +1050,15 @@ def result_projection(result: Dict[str, Any], request: Optional[Request] = None,
     if force_full or not request:
         return {**result, "full_access": True}
     user = current_user(request)
-    if has_full_report_access(user["id"]) or "platform_admin" in user.get("roles", []):
-        return {**result, "full_access": True}
-    # The free result intentionally exposes only the overall provisional
-    # profile snapshot. Detailed domain evidence is a paid report feature.
-    return {
-        **result,
-        "full_access": False,
-        "domain_scores": {},
-        "domain_metrics": {},
-        "paywall": {
-            "title": "Unlock your full report",
-            "body": "Your score is ready. Unlock the detailed seven-domain evaluation, interests, directions, certificate, and private email report.",
-            "product_id": "iaq-complete",
-        },
-    }
+    identity = RESULT_IDENTITIES.get(result["id"])
+    if identity and datetime.now(timezone.utc) >= datetime.fromisoformat(identity["expires_at"]):
+        RESULT_IDENTITIES.pop(result["id"], None)
+        identity = None
+    if user.get("is_guest") and (not identity or identity.get("user_id") != user.get("id")):
+        return {**result, "full_access": False, "identity_required": True, "domain_scores": {}, "domain_metrics": {}}
+    # The cognitive result is free after identity capture. Paid access starts
+    # at the direction, certificate, and private-delivery layer.
+    return {**result, "full_access": True, "paid_features_unlocked": has_full_report_access(user["id"]) or "platform_admin" in user.get("roles", [])}
 
 
 def _result_record(result_id: str, request: Optional[Request] = None) -> Dict[str, Any]:
@@ -1000,10 +1172,10 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         raise HTTPException(422, "Enter a valid email address")
     if not payload.granted:
         raise HTTPException(400, "Pilot data consent is required before releasing the result")
+    if payload.age_band != "18-22":
+        raise HTTPException(403, "Only the 18–22 scored pilot flow can release a saved result")
     user = current_user(request)
     was_guest = bool(user.get("is_guest"))
-    if was_guest and os.getenv("IAQ_AUTH_MODE", "development").lower() == "supabase":
-        raise HTTPException(401, "Sign in or create a Supabase account before saving your report")
     if was_guest:
         access.promote_guest_to_student(user, payload.email, payload.display_name, payload.age_band)
     else:
@@ -1012,6 +1184,11 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         user["age_band"] = payload.age_band
     if PERSISTENCE:
         PERSISTENCE.store_identity(user["id"], user["email"], user["display_name"], user["age_band"], payload.consent_version, payload.granted)
+    if payload.result_id:
+        result = _result_record(payload.result_id, request=None)
+        if result.get("user_id") != user["id"]:
+            raise HTTPException(404, "Result not found")
+        RESULT_IDENTITIES[payload.result_id] = {"user_id": user["id"], "email": user["email"], "captured_at": NOW(), "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()}
     access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age_band": payload.age_band, "consent_version": payload.consent_version})
     guardian = None
     if payload.age_band == "15-17":
@@ -1019,7 +1196,7 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
             raise HTTPException(422, "A guardian email is required for ages 15–17")
         guardian = create_guardian_consent(GuardianConsentCreate(guardian_email=payload.guardian_email, consent_version=payload.consent_version), request)
     promoted_token = access.issue_dev_session(user["id"]) if was_guest else None
-    return {"user": access.public_user(user), "consent_version": payload.consent_version, "guardian_consent": guardian, "session_token": promoted_token, "provider": "development" if promoted_token else None}
+    return {"user": access.public_user(user), "consent_version": payload.consent_version, "guardian_consent": guardian, "session_token": promoted_token, "provider": "development" if promoted_token else None, "result_id": payload.result_id}
 
 
 @app.post("/guardian-consents")
@@ -1445,10 +1622,14 @@ def question_bank_summary(request: Request = None) -> Dict[str, Any]:
     lifecycle_counts: Dict[str, int] = {}
     origin_counts: Dict[str, int] = {}
     family_counts: Dict[str, int] = {}
+    form_family_counts: Dict[str, int] = {}
     for item in ITEMS.values():
         lifecycle_counts[item.get("lifecycle_status", item.get("status", "UNKNOWN"))] = lifecycle_counts.get(item.get("lifecycle_status", item.get("status", "UNKNOWN")), 0) + 1
         origin_counts[item.get("data_origin", "UNKNOWN")] = origin_counts.get(item.get("data_origin", "UNKNOWN"), 0) + 1
-        family_counts[item.get("item_family_id", item["id"])] = family_counts.get(item.get("item_family_id", item["id"]), 0) + 1
+        source_family = item.get("source_family_id", item.get("item_family_id", item["id"]))
+        form_family = item.get("item_family_id", item["id"])
+        family_counts[source_family] = family_counts.get(source_family, 0) + 1
+        form_family_counts[form_family] = form_family_counts.get(form_family, 0) + 1
     eligible = [item for item in ITEMS.values() if item.get("lifecycle_status", item.get("status")) in {"PILOT", "ACTIVE"}]
     reviewed = reviewed_counts()
     independently_approved = review.review_counts(ITEMS.values())
@@ -1461,7 +1642,7 @@ def question_bank_summary(request: Request = None) -> Dict[str, Any]:
         "ready": bank_is_ready(),
         "review_gate_ready": review_gate_ready(),
         "review_gate_enforced": os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true",
-        "form_sizes": {"quick": 14, "complete": 56},
+        "form_sizes": {"quick": 14, "complete": 48},
         "difficulty_label": "medium_hard",
         "lifecycle": "MIXED_CANDIDATES_AND_PILOT",
         "generated_count": sum(1 for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"),
@@ -1473,6 +1654,7 @@ def question_bank_summary(request: Request = None) -> Dict[str, Any]:
         "lifecycle_counts": lifecycle_counts,
         "origin_counts": origin_counts,
         "unique_family_count": len(family_counts),
+        "unique_form_family_count": len(form_family_counts),
         "review_gate": "Generated candidates remain AUTO_VERIFIED until two independent human approvals move them into HUMAN_REVIEWED, then PILOT or ACTIVE.",
     }
 

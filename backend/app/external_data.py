@@ -139,13 +139,19 @@ def _normalise(record: Dict[str, Any], *, dataset: str, source_file: str, domain
     prompt = f"{context}\n\n{question}" if context else question
     asset_path = _asset_path(record, kind)
     asset_exists = bool(asset_path and resolve_asset_path("five_domains", asset_path))
+    source_family_id = f"{dataset_name}:{record.get('family') or record.get('protocol') or source_id}"
     item = {
         "id": f"external:{dataset_name}:{source_id}",
         "source_id": source_id,
         "source_dataset": dataset_name,
         "source_file": source_file,
         "domain": domain,
-        "item_family_id": f"{dataset_name}:{record.get('family') or record.get('protocol') or source_id}",
+        # Source families are broad generator/protocol labels. Use a stable
+        # concrete version ID for form assignment so a large generated bank
+        # can satisfy the eight-item quota without repeating the same exact
+        # variant; preserve the broad label for health and review analysis.
+        "item_family_id": f"{source_family_id}:{source_id}",
+        "source_family_id": source_family_id,
         "construct_id": domain,
         "type": "memory" if record.get("protocol") else "choice",
         "prompt": prompt,

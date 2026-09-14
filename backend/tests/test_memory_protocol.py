@@ -2,8 +2,10 @@ from app.main import ITEMS, public_item, runtime_readiness
 
 
 def test_memory_items_hide_the_stimulus_from_the_prompt_but_keep_a_transient_visual():
-    memory_items = [item for item in ITEMS.values() if item["domain"] == "working_memory"]
-    assert len(memory_items) == 120
+    memory_items = [item for item in ITEMS.values() if item["domain"] == "working_memory" and not item.get("memory_protocol_incomplete")]
+    incomplete_items = [item for item in ITEMS.values() if item["domain"] == "working_memory" and item.get("memory_protocol_incomplete")]
+    assert len(memory_items) >= 8
+    assert incomplete_items
     for item in memory_items:
         payload = public_item(item)
         assert "answer" not in payload

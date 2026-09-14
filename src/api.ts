@@ -9,11 +9,10 @@ const domainLabels: Record<string, Domain> = {
   numerical_reasoning: 'Numerical reasoning',
   verbal_reasoning: 'Verbal reasoning',
   visual_spatial_reasoning: 'Visual-spatial reasoning',
-  working_memory: 'Working memory',
-  processing_speed: 'Processing speed'
+  working_memory: 'Working memory'
 }
 
-type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[] | Record<string, unknown>; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number }
+type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[] | Record<string, unknown>; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; presentation_mode?: 'visual_labels'; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number; memory_recall_started?: boolean }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number; mode?: string; language?: string; practice?: boolean }
 type SessionSummary = { deadline_at: string; duration_seconds: number; question_count: number; answered_count: number; status: string; mode?: string; practice?: boolean }
 type ApiResult = {
@@ -44,6 +43,8 @@ type ApiResult = {
   completed_at: string
   disclaimer: string
   full_access?: boolean
+  identity_required?: boolean
+  paid_features_unlocked?: boolean
   paywall?: { title: string; body: string; product_id: string }
 }
 
@@ -72,7 +73,7 @@ function getBrowserSessionToken(): string | null {
 
 function normalize(item: ApiQuestion): Question {
   const imageUrl = item.image_url ? (item.image_url.startsWith('http') ? item.image_url : `${API_BASE}${item.image_url}`) : undefined
-  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options || [], helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters, imageUrl, memoryResponseType: item.memory_response_type, memoryInputLength: item.memory_input_length, memoryGridSize: item.memory_grid_size }
+  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options || [], helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters, imageUrl, presentationMode: item.presentation_mode, memoryResponseType: item.memory_response_type, memoryInputLength: item.memory_input_length, memoryGridSize: item.memory_grid_size, memoryRecallStarted: item.memory_recall_started }
 }
 
 function normalizeResult(result: ApiResult): AssessmentResult {
@@ -117,17 +118,19 @@ function normalizeResult(result: ApiResult): AssessmentResult {
     completedAt: result.completed_at,
     disclaimer: result.disclaimer,
     fullAccess: result.full_access,
+    identityRequired: result.identity_required,
+    paidFeaturesUnlocked: result.paid_features_unlocked,
     paywall: result.paywall
   }
 }
 
 export async function startRandomizedAssessment(): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
-  return startAssessmentWithOptions('complete', 'adult', 'en')
+  return startAssessmentWithOptions('complete', '18-22', 'en')
 }
 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   await ensureGuestSession()
-  const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.3', mode, age_band: ageBand, language }) })
+  const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
   const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
   return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0, practice: Boolean(session.practice || mode === 'practice') }
 }
@@ -140,8 +143,15 @@ export async function resumeRandomizedAssessment(sessionId: string): Promise<{ s
   return { sessionId, question: normalize(next), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: session.answered_count, practice: Boolean(session.practice || session.mode === 'practice') }
 }
 
+export async function beginMemoryRecall(sessionId: string, itemId: string): Promise<{ item_id: string; response_type: 'ordered_sequence' | 'cell_set'; input_length: number; grid_size?: number | null }> {
+  return request(`/sessions/${sessionId}/items/${itemId}/begin-recall`, { method: 'POST' })
+}
+
 export async function saveAndGetNext(sessionId: string, question: Question, answer: string, order: number, responseTimeMs: number): Promise<Question | null> {
-  await request(`/sessions/${sessionId}/responses`, { method: 'POST', headers: { 'Idempotency-Key': `${sessionId}:${question.id}` }, body: JSON.stringify({ item_id: question.id, answer, response_time_ms: responseTimeMs, presented_order: Math.max(0, order) }) })
+  const body = question.type === 'memory'
+    ? { item_id: question.id, response_type: question.memoryResponseType, response: JSON.parse(answer || '[]'), response_time_ms: responseTimeMs, presented_order: Math.max(0, order) }
+    : { item_id: question.id, answer_index: question.options.indexOf(answer), response_time_ms: responseTimeMs, presented_order: Math.max(0, order) }
+  await request(`/sessions/${sessionId}/responses`, { method: 'POST', headers: { 'Idempotency-Key': `${sessionId}:${question.id}` }, body: JSON.stringify(body) })
   const next = await request<ApiQuestion & { complete?: boolean; expired?: boolean }>(`/sessions/${sessionId}/next-item`)
   if (next.expired) throw new Error('The assessment time has ended.')
   return next.complete ? null : normalize(next)
@@ -379,8 +389,8 @@ export async function getCurrentUser(): Promise<AccessUser> {
   return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
 }
 
-export async function captureIdentity(payload: { email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
-  const result = await request<{ user: AccessUser; consent_version: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }>('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
+export async function captureIdentity(payload: { result_id?: string; email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
+  const result = await request<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }>('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
   if (result.session_token) {
     localStorage.setItem('iaq-session-token', result.session_token)
     localStorage.setItem('iaq-user', JSON.stringify(result.user))
@@ -396,6 +406,19 @@ export async function listProducts(): Promise<Product[]> {
 
 export async function createOrder(productId: string, beneficiaryUserId?: string): Promise<Order> {
   return request<Order>('/orders', { method: 'POST', body: JSON.stringify({ product_id: productId, beneficiary_user_id: beneficiaryUserId }) })
+}
+
+export type QRISInfo = { merchant_name: string; instructions: string; image_available: boolean; image_url?: string | null }
+export async function getQRISInfo(): Promise<QRISInfo> { return request<QRISInfo>('/payment-settings/qris') }
+export async function startManualCheckout(orderId: string): Promise<{ order: Order; payment_attempt: Record<string, unknown>; qris: QRISInfo; message: string }> { return request(`/orders/${orderId}/checkout`, { method: 'POST' }) }
+export async function submitPaymentProof(orderId: string, file: File, transactionRef?: string): Promise<{ accepted: boolean; id?: string; status: string }> {
+  const form = new FormData()
+  form.append('receipt', file)
+  if (transactionRef) form.append('transaction_ref', transactionRef)
+  const token = localStorage.getItem('iaq-session-token') || localStorage.getItem('iaq-guest-token') || ''
+  const response = await fetch(`${API_BASE}/orders/${orderId}/payment-proof`, { method: 'POST', headers: { 'X-IAQ-Session': token, 'Idempotency-Key': `${orderId}:${file.name}:${file.size}` }, body: form })
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `IAQ API ${response.status}`) }
+  return response.json()
 }
 
 export async function beginCheckout(orderId: string): Promise<{ order: Order; payment_attempt: { id: string; status: string; provider: string } | null; message: string }> {

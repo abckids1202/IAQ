@@ -7,7 +7,6 @@ export type Domain =
   | 'Verbal reasoning'
   | 'Visual-spatial reasoning'
   | 'Working memory'
-  | 'Processing speed'
 
 export type Question = {
   id: string
@@ -22,9 +21,11 @@ export type Question = {
   renderType?: string
   renderParameters?: Record<string, unknown>
   imageUrl?: string
+  presentationMode?: 'visual_labels'
   memoryResponseType?: 'ordered_sequence' | 'cell_set'
   memoryInputLength?: number
   memoryGridSize?: number
+  memoryRecallStarted?: boolean
 }
 
 export type Major = {
@@ -93,6 +94,8 @@ export type AssessmentResult = {
   completedAt: string
   disclaimer: string
   fullAccess?: boolean
+  identityRequired?: boolean
+  paidFeaturesUnlocked?: boolean
   paywall?: {
     title: string
     body: string

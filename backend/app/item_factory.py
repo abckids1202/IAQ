@@ -19,7 +19,11 @@ def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str
         raise ValueError(f"Invalid options for {item_id}")
     return {
         "id": item_id,
-        "item_family_id": family,
+        # A form must not repeat the same concrete item-family version. The
+        # broader generator family remains separately available for item-health
+        # analysis, because a generator can legitimately emit many variants.
+        "item_family_id": f"{family}:{item_id}",
+        "source_family_id": family,
         "domain": domain,
         "construct_id": construct or family,
         "type": kind,

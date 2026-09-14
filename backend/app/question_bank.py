@@ -7,16 +7,29 @@ real response data and psychometric review.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, Iterable, List
 
 from .item_factory import generated_items
 
+SCORED_DOMAINS = {
+    "abstract_reasoning",
+    "deductive_logic",
+    "numerical_reasoning",
+    "verbal_reasoning",
+    "visual_spatial_reasoning",
+    "working_memory",
+}
+
 
 def _item(item_id: str, domain: str, family: str, prompt: str, options: List[str], answer: str, explanation: str, kind: str = "choice") -> Dict[str, Any]:
     return {
         "id": item_id,
-        "item_family_id": family,
+        # Keep the broad construction family for audit, while treating the
+        # concrete authored variant as the family version used in a form.
+        "item_family_id": f"{family}:{item_id}",
+        "source_family_id": family,
         "construct_id": family,
         "domain": domain,
         "type": kind,
@@ -192,36 +205,58 @@ def _prepare_memory_items(items: Iterable[Dict[str, Any]]) -> None:
     for item in items:
         item["type"] = "memory"
         item["render_type"] = "memory"
-        # Factory-generated candidates already carry a safe, separate
-        # stimulus. This also makes the second pass over QUESTION_BANK
-        # idempotent and preserves their distinct, human-readable prompts.
-        if item.get("memory_stimulus") is not None:
-            continue
         prompt = str(item.get("prompt", ""))
         item["memory_protocol"] = {
             "study_ms": 3000,
             "response_timeout_ms": 30000,
             "replay_allowed": False,
-            "score_method": "exact_option",
+            "score_method": "exact_recall",
         }
-        item["memory_stimulus"] = None
-        if prompt.startswith("Remember "):
+        item["memory_protocol_incomplete"] = False
+
+        # Prefer a structured stimulus already supplied by a deterministic
+        # factory. Older authored records need a small, numeric-only adapter.
+        stimulus = item.get("memory_stimulus")
+        expected = stimulus[:] if isinstance(stimulus, list) and stimulus else None
+        if not expected and prompt.startswith("Remember "):
             match = re.match(r"Remember (.+?)\. (.+)$", prompt)
             if match:
-                stimulus, task = match.groups()
-                stimulus = re.sub(r"^(the order|the sequence)\s+", "", stimulus, flags=re.IGNORECASE)
-                item["memory_stimulus"] = stimulus.split(" — ")
-                item["prompt"] = f"Study the sequence for three seconds. It will disappear. {task}"
-        elif prompt.startswith("Study this "):
-            # Generated candidates intentionally carried the answer in the
-            # prompt. The answer is retained only in the protected key.
-            item["memory_stimulus"] = str(item.get("answer", "")).split(" — ")
-            item["prompt"] = "Study the sequence for three seconds. It will disappear. Which option matches it exactly?"
-        elif prompt.startswith(("Start ", "Begin ", "Keep ", "Hold ")):
-            # Updating trials present an operation string, then ask for the
-            # resulting value after it has disappeared.
-            item["memory_stimulus"] = [prompt.rstrip("?")]
-            item["prompt"] = "Study the calculation for three seconds. It will disappear. What result do the steps produce?"
+                raw_stimulus, _task = match.groups()
+                raw_stimulus = re.sub(r"^(the order|the sequence)\s+", "", raw_stimulus, flags=re.IGNORECASE)
+                stimulus = [part.strip() for part in raw_stimulus.split(" — ")]
+                expected = stimulus[:]
+                item["prompt"] = "Study the number sequence for three seconds. It will disappear. Recall every number in order."
+        elif not expected and prompt.startswith(("Start ", "Begin ", "Keep ", "Hold ")):
+            # Updating items show a calculation during study and recall only
+            # the resulting number after the stimulus disappears.
+            stimulus = re.findall(r"-?\d+", prompt)
+            answer_match = re.findall(r"-?\d+", str(item.get("answer", "")))
+            expected = [answer_match[-1]] if answer_match else []
+            item["prompt"] = "Study the calculation for three seconds. It will disappear. Enter the result."
+        elif not expected and prompt.startswith(("Study ", "Read ", "Observe ", "Take in ", "Focus on ", "Notice ", "Attend to ", "Inspect ")):
+            raw_answer = str(item.get("answer", ""))
+            stimulus = [part.strip() for part in raw_answer.split(" — ")]
+            expected = stimulus[:]
+            item["prompt"] = "Study the number sequence for three seconds. It will disappear. Recall every number in order."
+
+        numeric_stimulus = isinstance(stimulus, list) and bool(stimulus) and all(str(value).strip().lstrip("-").isdigit() for value in stimulus)
+        numeric_expected = isinstance(expected, list) and bool(expected) and all(str(value).strip().lstrip("-").isdigit() for value in expected)
+        if not numeric_stimulus or not numeric_expected:
+            # Letter sequences and unstructured legacy prompts cannot be
+            # rendered by numeric recall controls, so quarantine them.
+            item["memory_protocol_incomplete"] = True
+            item["memory_stimulus"] = None
+            item["memory_response_type"] = None
+            item["memory_input_length"] = 0
+            item["options"] = []
+            item["answer"] = ""
+            continue
+
+        item["memory_stimulus"] = [str(value) for value in stimulus]
+        item["memory_response_type"] = "ordered_sequence"
+        item["memory_input_length"] = len(expected)
+        item["options"] = []
+        item["answer"] = json.dumps([int(str(value)) for value in expected], ensure_ascii=False, separators=(",", ":"))
 
 
 _prepare_memory_items(MEMORY)
@@ -267,7 +302,7 @@ def bank_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, in
 
 def bank_is_ready(items: Iterable[Dict[str, Any]] = QUESTION_BANK, minimum_per_domain: int = 20) -> bool:
     counts = bank_counts(items)
-    return len(counts) == 7 and all(value >= minimum_per_domain for value in counts.values())
+    return all(counts.get(domain, 0) >= minimum_per_domain for domain in SCORED_DOMAINS)
 
 
 def reviewed_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, int]:
@@ -283,4 +318,4 @@ def review_gate_ready(items: Iterable[Dict[str, Any]] = QUESTION_BANK, minimum_p
     # Import lazily to avoid the question-bank/review module import cycle.
     from . import review
     counts = review.review_counts(items)
-    return len(counts) == 7 and all(value >= minimum_per_domain for value in counts.values())
+    return all(counts.get(domain, 0) >= minimum_per_domain for domain in SCORED_DOMAINS)

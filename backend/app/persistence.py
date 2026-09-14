@@ -254,7 +254,7 @@ class PostgresAssessmentStore:
                 metrics = row[7] if isinstance(row[7], dict) else json.loads(row[7])
                 quality = row[8] if isinstance(row[8], dict) else json.loads(row[8])
                 return {
-                    "id": str(row[0]), "session_id": str(row[1]), "user_id": row[10], "assessment_version": version[0] if version else "IAQ-COG-0.3", "score_version": domain_rows[0][0] if domain_rows else "IAQ-PROVISIONAL-ACCURACY-1", "score_kind": row[12] or "provisional_domain_signal", "norm_version": row[13], "iq_score": int(row[14]) if row[14] is not None else None,
+                    "id": str(row[0]), "session_id": str(row[1]), "user_id": row[10], "assessment_version": version[0] if version else "IAQ-COG-0.4", "score_version": domain_rows[0][0] if domain_rows else "IAQ-PROVISIONAL-ACCURACY-1", "score_kind": row[12] or "provisional_domain_signal", "norm_version": row[13], "iq_score": int(row[14]) if row[14] is not None else None,
                     "composite": int(row[2]) if row[2] is not None else None, "domain_scores": {domain: int(score) if score is not None else None for _, domain, score in domain_rows}, "domain_metrics": metrics,
                     "confidence": row[3], "quality": quality, "answered_count": row[6], "question_count": row[5], "duration_seconds": 2100,
                     "completed_at": row[9].isoformat() if row[9] else datetime.now(timezone.utc).isoformat(), "created_at": row[9].isoformat() if row[9] else None, "disclaimer": row[4], "access_tier": row[11] or "summary",

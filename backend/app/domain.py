@@ -15,7 +15,6 @@ DOMAINS = (
     "verbal_reasoning",
     "visual_spatial_reasoning",
     "working_memory",
-    "processing_speed",
 )
 
 # This is deliberately a separate score track from the observed domain signals.
@@ -26,7 +25,7 @@ EXPERIMENTAL_IQ_SCORE_VERSION = "IAQ-IQ-EXPERIMENTAL-1"
 EXPERIMENTAL_IQ_SCORE_KIND = "experimental_iq_style_estimate"
 EXPERIMENTAL_IQ_SCORE_LABEL = "IAQ IQ score — experimental"
 EXPERIMENTAL_IQ_SCORE_SCALE = "100_mean_15_sd_reference_only"
-EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (seven_domain_mean * 0.60)"
+EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (six_domain_mean * 0.60)"
 
 
 @dataclass(frozen=True)
@@ -63,6 +62,9 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         domain = item_domains.get(item_id)
         if domain not in totals:
             continue
+        # Every complete form reserves eight items per domain.  Responses are
+        # counted here for evidence/quality, while the fixed denominator below
+        # ensures omissions cannot inflate accuracy.
         totals[domain][1] += 1
         if str(response.get("answer")) == item_keys.get(item_id):
             totals[domain][0] += 1
@@ -76,13 +78,13 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         # Until item parameters and age norms exist, report observed accuracy
         # directly. A synthetic baseline (for example, 50 at zero correct)
         # would make the result look more scientific than the evidence allows.
-        domain: round((correct / total) * 100) if total >= minimum_items_for_interpretation else None
+        domain: round((correct / 8) * 100) if total >= minimum_items_for_interpretation else None
         for domain, (correct, total) in totals.items()
     }
     answered = sum(pair[1] for pair in totals.values())
     interpretable_scores = [value for value in domain_scores.values() if isinstance(value, int)]
     composite = round(sum(interpretable_scores) / len(interpretable_scores)) if len(interpretable_scores) >= 2 else None
-    # An IQ-style number is withheld unless all seven domains have enough
+    # An IQ-style number is withheld unless all six domains have enough
     # evidence. With no human calibration or age norms, this is only a
     # transparent reference transform of the complete profile mean.
     complete_profile = len(interpretable_scores) == len(DOMAINS)
@@ -103,7 +105,7 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         domain_metrics[domain] = {
             "answered": total,
             "correct": correct,
-            "accuracy": round((correct / total) * 100) if total else None,
+            "accuracy": round((correct / 8) * 100) if total else None,
             "median_response_time_ms": median,
             "interpretation_eligible": total >= minimum_items_for_interpretation,
             "evidence_note": None if total >= minimum_items_for_interpretation else f"Only {total} scored item(s) completed in this area.",

@@ -12,7 +12,7 @@ def test_guardian_purchase_uses_backend_price_and_selected_beneficiary():
     order = access.create_order("demo-guardian", "iaq-complete", "demo-student")
     assert order["beneficiary_user_id"] == "demo-student"
     assert order["currency"] == "IDR"
-    assert order["total_minor"] == 14900000
+    assert order["total_minor"] == 50000
     assert "amount" not in order
 
 

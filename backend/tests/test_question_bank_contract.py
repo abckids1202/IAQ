@@ -8,7 +8,7 @@ def test_bank_has_120_candidates_per_domain_and_balanced_complete_forms():
     assert len(ITEMS) == 840
     assert set(counts.values()) == {120}
     form = create_randomized_form("complete")
-    assert len(form) == 56
+    assert len(form) == 48
     assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
 
 
@@ -18,7 +18,7 @@ def test_student_item_payload_is_allowlisted():
     assert "explanation" not in item
     assert "generation_parameters" not in item
     assert "provenance" not in item
-    assert set(item) <= {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type"}
+    assert set(item) <= {"id", "domain", "type", "prompt", "options", "helper", "visual", "render_type", "presentation_mode"}
 
 
 def test_summary_exposes_review_readiness_without_answer_keys():

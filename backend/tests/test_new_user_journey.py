@@ -18,30 +18,37 @@ def test_new_user_can_register_test_unlock_and_continue():
     session_response = client.post("/assessments/iaq-cognitive/sessions", json={"mode": "complete"}, headers=headers)
     assert session_response.status_code == 200
     session_id = session_response.json()["id"]
-    assert session_response.json()["question_count"] == 56
+    assert session_response.json()["question_count"] == 48
 
     started = client.post(f"/sessions/{session_id}/start", headers=headers)
     assert started.status_code == 200
 
-    for presented_order in range(56):
+    for presented_order in range(48):
         item_response = client.get(f"/sessions/{session_id}/next-item", headers=headers)
         assert item_response.status_code == 200
         item = item_response.json()
         assert "answer" not in item
         assert "answer_index" not in item
+        response_payload = {"item_id": item["id"], "presented_order": presented_order, "response_time_ms": 900}
+        if item.get("type") == "memory":
+            memory_type = item.get("memory_response_type") or "ordered_sequence"
+            memory_length = item.get("memory_input_length") or 4
+            response_payload["response_type"] = memory_type
+            response_payload["response"] = list(range(memory_length)) if memory_type == "cell_set" else [0] * memory_length
+        else:
+            response_payload["answer_index"] = 0
         answer_response = client.post(
             f"/sessions/{session_id}/responses",
-            json={"item_id": item["id"], "answer": item["options"][0], "presented_order": presented_order, "response_time_ms": 900},
+            json=response_payload,
             headers={**headers, "Idempotency-Key": f"new-user:{session_id}:{presented_order}"},
         )
-        assert answer_response.status_code == 200
+        assert answer_response.status_code == 200, f"order {presented_order} item {item['id']} payload {response_payload}: {answer_response.text}"
 
     submitted = client.post(f"/sessions/{session_id}/submit", headers=headers)
     assert submitted.status_code == 200
     result = submitted.json()
     result_id = result["id"]
-    assert result["full_access"] is False
-    assert result["paywall"]["product_id"] == "iaq-complete"
+    assert result["full_access"] is True
 
     order_response = client.post("/orders", json={"product_id": "iaq-complete"}, headers=headers)
     assert order_response.status_code == 200
@@ -55,7 +62,7 @@ def test_new_user_can_register_test_unlock_and_continue():
     unlocked = client.get(f"/results/{result_id}", headers=headers)
     assert unlocked.status_code == 200
     assert unlocked.json()["full_access"] is True
-    assert len(unlocked.json()["domain_scores"]) == 7
+    assert len(unlocked.json()["domain_scores"]) == 6
 
     interests = client.post(
         "/questionnaires/compass-v1/responses",

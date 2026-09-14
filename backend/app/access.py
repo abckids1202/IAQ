@@ -118,9 +118,9 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
     },
     "iaq-complete": {
         "id": "iaq-complete", "code": "IAQ_COMPLETE", "name": "IAQ Complete",
-        "description": "The full 56-question assessment, visual report, and direction exploration.",
+        "description": "Practical directions, completion certificate, and private report delivery after your free result.",
         "entitlement_code": "assessment.complete.start", "report_code": "assessment.complete.report",
-        "price_id": "price-complete-idr", "amount_minor": 14900000, "currency": "IDR", "active": True,
+        "price_id": "price-complete-idr", "amount_minor": 50000, "currency": "IDR", "active": True,
     },
     "iaq-reassessment": {
         "id": "iaq-reassessment", "code": "IAQ_REASSESSMENT", "name": "IAQ Reassessment Credit",
@@ -318,7 +318,7 @@ def issue_certificate(user_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
     identifier = f"IAQ-{secrets.token_hex(5).upper()}"
     certificate = {
         "id": str(uuid4()), "certificate_identifier": identifier, "user_id": user_id, "result_id": result["id"],
-        "title": "IAQ Cognitive Profile completion", "assessment_version": result.get("assessment_version", "IAQ-COG-0.3"),
+        "title": "IAQ Cognitive Profile completion", "assessment_version": result.get("assessment_version", "IAQ-COG-0.4"),
         "score_version": result.get("score_version", "SCORING-V1"), "status": "issued", "issued_at": now(),
         "verification_url": f"/verify?certificate={identifier}", "data_origin": "REAL_PILOT",
     }

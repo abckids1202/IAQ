@@ -22,7 +22,7 @@ def audit_catalog() -> Dict[str, Any]:
         total += 1
         item_id = str(item["id"])
         counts[item["domain"]] += 1
-        families[f"{item['domain']}:{item['item_family_id']}"] += 1
+        families[f"{item['domain']}:{item.get('source_family_id', item['item_family_id'])}"] += 1
         if item_id in seen_ids:
             errors.append({"id": item_id, "code": "duplicate_id"})
         seen_ids.add(item_id)
