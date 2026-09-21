@@ -9,7 +9,7 @@ const domainLabels: Record<string, Domain> = {
   numerical_reasoning: 'Numerical reasoning',
   verbal_reasoning: 'Verbal reasoning',
   visual_spatial_reasoning: 'Visual-spatial reasoning',
-  working_memory: 'Working memory'
+  processing_speed: 'Processing speed'
 }
 const domainLabelsId: Record<string, string> = {
   abstract_reasoning: 'Penalaran abstrak',
@@ -17,7 +17,7 @@ const domainLabelsId: Record<string, string> = {
   numerical_reasoning: 'Penalaran numerik',
   verbal_reasoning: 'Penalaran verbal',
   visual_spatial_reasoning: 'Penalaran visual-spasial',
-  working_memory: 'Memori kerja'
+  processing_speed: 'Kecepatan pemrosesan'
 }
 const visualPromptsId: Record<string, string> = {
   abstract_reasoning: 'Panel mana yang melengkapi pola?',
@@ -163,8 +163,8 @@ export async function startRandomizedAssessment(): Promise<{ sessionId: string; 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   await ensureGuestSession()
   const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
-  if (mode === 'complete' && session.question_count !== 48) {
-    throw new Error(`The scored assessment returned ${session.question_count} questions instead of 48.`)
+  if (mode === 'complete' && session.question_count !== 40) {
+    throw new Error(`The scored assessment returned ${session.question_count} questions instead of 40.`)
   }
   const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
   return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0, practice: Boolean(session.practice || mode === 'practice') }
@@ -172,8 +172,8 @@ export async function startAssessmentWithOptions(mode: 'complete' | 'practice', 
 
 export async function resumeRandomizedAssessment(sessionId: string): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   const session = await request<SessionSummary>(`/sessions/${sessionId}`)
-  if (!session.practice && session.question_count !== 48) {
-    throw new InvalidAssessmentSession(`The saved assessment has ${session.question_count} questions; a fresh 48-question assessment is required.`)
+  if (!session.practice && session.question_count !== 40) {
+    throw new InvalidAssessmentSession(`The saved assessment has ${session.question_count} questions; a fresh 40-question assessment is required.`)
   }
   if (session.status === 'complete' || session.status === 'timed_out' || Date.parse(session.deadline_at) <= Date.now() || session.answered_count >= session.question_count) {
     throw new CompletedAssessment(await finishAssessment(sessionId))

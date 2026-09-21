@@ -6,7 +6,7 @@ export const domains: Domain[] = [
   'Numerical reasoning',
   'Verbal reasoning',
   'Visual-spatial reasoning',
-  'Working memory'
+  'Processing speed'
 ]
 
 export const domainMeta: Record<Domain, { short: string; description: string; tone: string }> = {
@@ -15,7 +15,7 @@ export const domainMeta: Record<Domain, { short: string; description: string; to
   'Numerical reasoning': { short: 'Numerical', description: 'Recognising quantitative patterns and structure.', tone: 'orange' },
   'Verbal reasoning': { short: 'Verbal', description: 'Working with meaning, evidence and language.', tone: 'rose' },
   'Visual-spatial reasoning': { short: 'Spatial', description: 'Manipulating shape, position and visual systems.', tone: 'violet' },
-  'Working memory': { short: 'Memory', description: 'Holding and updating information briefly.', tone: 'green' }
+  'Processing speed': { short: 'Speed', description: 'Comparing information accurately under time pressure.', tone: 'green' }
 }
 
 export const questions: Question[] = [
@@ -24,13 +24,13 @@ export const questions: Question[] = [
   { id: 'num-01', domain: 'Numerical reasoning', type: 'sequence', prompt: 'Complete the sequence: 3, 6, 12, 24, __', helper: 'You may use mental arithmetic or write a quick note.', options: ['30', '36', '42', '48'] },
   { id: 'verbal-01', domain: 'Verbal reasoning', type: 'choice', prompt: 'A map is to navigation as a score is to…', options: ['Music', 'Evaluation', 'Paper', 'Competition'] },
   { id: 'spatial-01', domain: 'Visual-spatial reasoning', type: 'choice', prompt: 'Imagine the L-shape rotates 90° clockwise. Which direction does its short arm point?', helper: 'Use the shape preview to anchor the rotation.', options: ['Up', 'Down', 'Left', 'Right'], visual: ['■ □', '■ ■'] },
-  { id: 'memory-01', domain: 'Working memory', type: 'memory', prompt: 'Remember this sequence, then select it in the same order.', helper: 'The sequence will be hidden after a short moment.', options: ['7 — 2 — 9 — 4', '7 — 9 — 2 — 4', '2 — 7 — 4 — 9', '9 — 4 — 7 — 2'] },
+  { id: 'speed-01', domain: 'Processing speed', type: 'speed', prompt: 'Which option matches the target exactly?', options: ['A  ◆○', 'B  ○◆', 'C  ◆◆', 'D  ○○'] },
   { id: 'abs-02', domain: 'Abstract reasoning', type: 'choice', prompt: 'If ▲ becomes ▶, then ◀ becomes…', options: ['▲', '▼', '◆', '●'] },
   { id: 'logic-02', domain: 'Deductive logic', type: 'choice', prompt: 'If the studio is open, the green light is on. The green light is off. Which conclusion is safest?', options: ['The studio is closed', 'The studio is open', 'The light is broken', 'The studio is probably busy'] },
   { id: 'num-02', domain: 'Numerical reasoning', type: 'sequence', prompt: 'Which number is the outlier? 8, 16, 24, 31, 40', options: ['8', '16', '31', '40'] },
   { id: 'verbal-02', domain: 'Verbal reasoning', type: 'choice', prompt: 'Which statement is best supported? “The library added 20 study seats. Afternoon attendance rose.”', options: ['The new seats caused all growth', 'Afternoon attendance rose after the change', 'Morning attendance fell', 'Every student prefers the library'] },
   { id: 'spatial-02', domain: 'Visual-spatial reasoning', type: 'choice', prompt: 'Which pair has the same number of shaded cells as the reference?', options: ['A  ■□□■', 'B  ■■□□', 'C  □■■□', 'D  □□■■'], visual: ['■ □', '□ ■'] },
-  { id: 'memory-02', domain: 'Working memory', type: 'memory', prompt: 'Keep the letters in mind. Which option reverses their order?', options: ['K — M — R — T', 'T — R — M — K', 'M — K — T — R', 'R — T — K — M'] },
+  { id: 'speed-02', domain: 'Processing speed', type: 'speed', prompt: 'Find the only exact match for the target code.', options: ['731', '713', '371', '733'] },
 ]
 
 export const majors: Major[] = [

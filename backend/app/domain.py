@@ -14,8 +14,12 @@ DOMAINS = (
     "numerical_reasoning",
     "verbal_reasoning",
     "visual_spatial_reasoning",
-    "working_memory",
+    "processing_speed",
 )
+# Five item-based domains make up the 40-question form. Processing speed is
+# retained as a sixth profile aspect and is inferred from response timing, not
+# from a separate bank of speed questions.
+ITEM_DOMAINS = tuple(domain for domain in DOMAINS if domain != "processing_speed")
 
 # This is deliberately a separate score track from the observed domain signals.
 # It maps observed performance into an arbitrary 70–130 display range,
@@ -25,7 +29,7 @@ EXPERIMENTAL_IQ_SCORE_VERSION = "IAQ-IQ-EXPERIMENTAL-2"
 EXPERIMENTAL_IQ_SCORE_KIND = "experimental_iq_style_estimate"
 EXPERIMENTAL_IQ_SCORE_LABEL = "IAQ IQ score — experimental"
 EXPERIMENTAL_IQ_SCORE_SCALE = "70_130_uncalibrated_reference"
-EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (six_domain_mean * 0.60)"
+EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (five_item_domain_mean_and_timing_speed * 0.60)"
 
 
 @dataclass(frozen=True)
@@ -53,7 +57,7 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     Missing domains remain visible with a conservative baseline. This is not an
     IRT estimate and must not be presented as a population percentile.
     """
-    totals = {domain: [0, 0] for domain in DOMAINS}
+    totals = {domain: [0, 0] for domain in ITEM_DOMAINS}
     response_times: Dict[str, List[int]] = {domain: [] for domain in DOMAINS}
     rapid = 0
     interruptions = 0
@@ -87,18 +91,26 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         domain: round((correct / 8) * 100) if total >= minimum_items_for_interpretation else None
         for domain, (correct, total) in totals.items()
     }
+    all_times = sorted(time for times in response_times.values() for time in times)
+    speed_midpoint = len(all_times) // 2
+    median_all_time = None if not all_times else all_times[speed_midpoint] if len(all_times) % 2 else round((all_times[speed_midpoint - 1] + all_times[speed_midpoint]) / 2)
+    # Timing is a transparent pilot signal only. It is not calibrated against
+    # a population and must not be described as a normed processing-speed score.
+    speed_score = None if len(all_times) < minimum_items_for_interpretation else round(max(0, min(100, 100 - ((median_all_time - 1500) / 7500 * 100))))
+    domain_scores["processing_speed"] = speed_score
     answered = sum(pair[1] for pair in totals.values())
     interpretable_scores = [value for value in domain_scores.values() if isinstance(value, int)]
-    composite = round(sum(interpretable_scores) / len(interpretable_scores)) if len(interpretable_scores) >= 2 else None
-    # An IQ-style number is withheld unless all six domains have enough
+    composite = round(sum(interpretable_scores) / len(interpretable_scores)) if len(interpretable_scores) == len(DOMAINS) else None
+    # An IQ-style number is withheld unless all five item domains and timing
+    # have enough
     # evidence. With no human calibration or age norms, this is only a
     # transparent reference transform of the complete profile mean.
     complete_profile = len(interpretable_scores) == len(DOMAINS)
     # Round once at the end; rounding each domain first biases the composite.
-    exact_composite = sum(correct / 8 * 100 for correct, _ in totals.values()) / len(DOMAINS)
+    exact_composite = (sum(correct / 8 * 100 for correct, _ in totals.values()) + (speed_score or 0)) / len(DOMAINS)
     iq_score = round(70 + (exact_composite * 0.60)) if complete_profile else None
     warnings: List[str] = []
-    if answered < 48:
+    if answered < 40:
         warnings.append("incomplete_assessment")
     if rapid >= 2:
         warnings.append("rapid_guessing_possible")
@@ -120,6 +132,15 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
             "interpretation_eligible": total >= minimum_items_for_interpretation,
             "evidence_note": None if total >= minimum_items_for_interpretation else f"Only {total} scored item(s) completed in this area.",
         }
+    domain_metrics["processing_speed"] = {
+        "answered": len(all_times),
+        "correct": None,
+        "omitted": max(0, 40 - len(all_times)),
+        "accuracy": None,
+        "median_response_time_ms": median_all_time,
+        "interpretation_eligible": speed_score is not None,
+        "evidence_note": None if speed_score is not None else "Not enough response-time evidence in this snapshot.",
+    }
     return ScoreResult(
         domain_scores,
         composite,

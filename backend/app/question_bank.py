@@ -19,7 +19,6 @@ SCORED_DOMAINS = {
     "numerical_reasoning",
     "verbal_reasoning",
     "visual_spatial_reasoning",
-    "working_memory",
 }
 
 
@@ -289,8 +288,9 @@ MINIMUM_ITEMS_PER_DOMAIN = 20
 TARGET_ITEMS_PER_DOMAIN = 120
 REVIEWED_ITEMS_PER_DOMAIN = 100
 
-QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + MEMORY + SPEED + generated_items()
-_prepare_memory_items(item for item in QUESTION_BANK if item.get("domain") == "working_memory")
+# Working-memory items remain in the source file for research/reference only;
+# they are deliberately excluded from the scored product bank.
+QUESTION_BANK: List[Dict[str, Any]] = ABSTRACT + DEDUCTIVE + NUMERICAL + VERBAL + SPATIAL + [item for item in generated_items() if item.get("domain") not in {"working_memory", "processing_speed"}]
 
 
 def bank_counts(items: Iterable[Dict[str, Any]] = QUESTION_BANK) -> Dict[str, int]:

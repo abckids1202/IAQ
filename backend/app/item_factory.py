@@ -236,6 +236,8 @@ def _assert_unique(items: Iterable[Dict[str, Any]]) -> None:
 
 
 def generated_items() -> List[Dict[str, Any]]:
-    all_items = abstract_items() + deductive_items() + numerical_items() + verbal_items() + spatial_items() + memory_items() + speed_items()
+    # Working-memory and processing-speed variants are retained for research
+    # tooling but are not part of the current 40-question product.
+    all_items = abstract_items() + deductive_items() + numerical_items() + verbal_items() + spatial_items()
     _assert_unique(all_items)
     return all_items

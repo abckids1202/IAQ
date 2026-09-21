@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 
 from .domain import (
     DOMAINS,
+    ITEM_DOMAINS,
     EXPERIMENTAL_IQ_SCORE_KIND,
     EXPERIMENTAL_IQ_SCORE_LABEL,
     EXPERIMENTAL_IQ_SCORE_METHOD,
@@ -66,7 +67,7 @@ app.add_middleware(CORSMiddleware, allow_origins=_configured_origins, allow_orig
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 DURATION_SECONDS = 35 * 60
-QUESTION_COUNT = 48
+QUESTION_COUNT = 40
 DOMAIN_QUOTA = 8
 SCORE_DISCLAIMER = "This IAQ IQ score is an experimental, non-normed reference estimate, not an official, clinical, diagnostic, or population IQ score. It uses a transparent transform of your complete six-domain profile; no percentile or age norm is used. Timing is shown as context and does not change the score."
 VISUAL_PROMPTS = {
@@ -82,7 +83,6 @@ ITEMS: Dict[str, Dict[str, Any]] = {
     "num-01": {"id": "num-01", "domain": "numerical_reasoning", "type": "sequence", "prompt": "Complete the sequence: 3, 6, 12, 24, __", "options": ["30", "36", "42", "48"], "answer": "48", "status": "ACTIVE"},
     "verbal-01": {"id": "verbal-01", "domain": "verbal_reasoning", "type": "choice", "prompt": "A map is to navigation as a score is to…", "options": ["Music", "Evaluation", "Paper", "Competition"], "answer": "Evaluation", "status": "ACTIVE"},
     "spatial-01": {"id": "spatial-01", "domain": "visual_spatial_reasoning", "type": "choice", "prompt": "Imagine the L-shape rotates 90° clockwise. Which direction does its short arm point?", "options": ["Up", "Down", "Left", "Right"], "answer": "Down", "status": "ACTIVE"},
-    "memory-01": {"id": "memory-01", "domain": "working_memory", "type": "memory", "prompt": "Remember this sequence, then select it in the same order.", "options": ["7-2-9-4", "7-9-2-4", "2-7-4-9", "9-4-7-2"], "answer": "7-2-9-4", "status": "ACTIVE"},
     "speed-01": {"id": "speed-01", "domain": "processing_speed", "type": "speed", "prompt": "Find the only pair of matching symbols.", "options": ["A", "B", "C", "D"], "answer": "B", "status": "ACTIVE"},
 }
 # Local development uses the imported Dataset Lab catalog by default so the
@@ -92,9 +92,8 @@ ITEMS = {item["id"]: item for item in QUESTION_BANK}
 ASSESSMENT_SOURCE = os.getenv("IAQ_ASSESSMENT_SOURCE", "staged" if os.getenv("IAQ_ENV", "development").lower() != "production" else "authored").lower()
 if ASSESSMENT_SOURCE == "staged":
     staged_items = staged_assessment.load_items()
-    authored_speed = {item["id"]: item for item in QUESTION_BANK if item.get("domain") == "processing_speed"}
     if staged_items:
-        ITEMS = {**authored_speed, **staged_items}
+        ITEMS = staged_items
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 RESULTS: Dict[str, Dict[str, Any]] = {}
 EVENTS: List[Dict[str, Any]] = []
@@ -391,7 +390,7 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     if os.getenv("IAQ_ENV", "development").lower() == "production" and mode != "practice" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
         raise HTTPException(503, "Production assessments require the reviewed-item release gate")
     # Every assessment-shaped flow uses the same complete six-domain form.
-    # Practice is ephemeral and unscored, but it still contains all 48 items
+    # Practice is ephemeral and unscored, but it still contains all 40 items
     # so participants never see a misleading 12-question test.
     per_domain = 8
     staged_default = "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false"
@@ -424,25 +423,25 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
     # The local development preview can still exercise the full assessment
     # contract while the generated reserve is awaiting human review. This
     # fallback is deliberately disabled whenever the pilot review gate is on.
-    family_ready = all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS)
+    family_ready = all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in ITEM_DOMAINS)
     if (not eligible_items or not family_ready) and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true" and not allow_staged:
         eligible_items = [item for item in ITEMS.values() if structurally_valid(item) and item.get("language", "en") == language and item.get("status") in {"PILOT", "ACTIVE"}]
     if os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true" and mode != "practice":
         eligible_items = [item for item in eligible_items if review.review_summary(item)["review_ready"]]
         if not review_gate_ready(eligible_items):
             raise HTTPException(503, "The question-bank review gate requires 100 eligible reviewed items per domain")
-        if not all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in DOMAINS):
+        if not all(len({item.get("item_family_id", item["id"]) for item in eligible_items if item["domain"] == domain}) >= per_domain for domain in ITEM_DOMAINS):
             raise HTTPException(503, "The reviewed question bank does not yet contain enough distinct item families for a form")
     if not bank_is_ready(eligible_items, minimum_per_domain=per_domain):
         raise HTTPException(503, "The reviewed question bank has not reached the pilot gate yet")
-    pools: Dict[str, List[str]] = {domain: [] for domain in DOMAINS}
+    pools: Dict[str, List[str]] = {domain: [] for domain in ITEM_DOMAINS}
     for item in eligible_items:
         pools[item["domain"]].append(item["id"])
-    if any(len(pools[domain]) < per_domain for domain in DOMAINS):
+    if any(len(pools[domain]) < per_domain for domain in ITEM_DOMAINS):
         raise HTTPException(503, f"The eligible question bank does not contain {per_domain} valid items in every scored domain")
     rng = random.SystemRandom()
     selected: List[str] = []
-    for domain in DOMAINS:
+    for domain in ITEM_DOMAINS:
         domain_items = [ITEMS[item_id] for item_id in pools[domain]]
         rng.shuffle(domain_items)
         by_family: Dict[str, List[Dict[str, Any]]] = {}
@@ -2042,7 +2041,7 @@ def question_bank_summary(request: Request = None) -> Dict[str, Any]:
         "ready": bank_is_ready(),
         "review_gate_ready": review_gate_ready(),
         "review_gate_enforced": os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() == "true",
-        "form_sizes": {"quick": 14, "complete": 48},
+        "form_sizes": {"quick": 12, "complete": 40},
         "difficulty_label": "medium_hard",
         "lifecycle": "MIXED_CANDIDATES_AND_PILOT",
         "generated_count": sum(1 for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"),

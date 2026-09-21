@@ -35,7 +35,7 @@ def test_unsigned_first_visit_is_guest_not_demo_student(monkeypatch):
         headers=headers,
     )
     assert session_response.status_code == 200
-    assert session_response.json()["question_count"] == 48
+    assert session_response.json()["question_count"] == 40
     session_details = client.get(f"/sessions/{session_response.json()['id']}", headers=headers)
     assert session_details.status_code == 200
     assert session_details.json()["user_id"] == guest_id

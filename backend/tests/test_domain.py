@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import pytest
 
-from app.domain import DOMAINS, classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
+from app.domain import DOMAINS, ITEM_DOMAINS, classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
 from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseCreate, create_randomized_form, create_session, get_result, public_item, start_session, submit_response, submit_session, begin_memory_recall
 
 
@@ -59,14 +59,14 @@ def test_provisional_signal_reports_observed_accuracy_without_synthetic_floor():
 
 
 def test_experimental_iq_score_requires_complete_profile_and_uses_reference_transform():
-    item_domains = {f"{domain}-{index}": domain for domain in DOMAINS for index in range(8)}
+    item_domains = {f"{domain}-{index}": domain for domain in ITEM_DOMAINS for index in range(8)}
     item_keys = {item_id: "right" for item_id in item_domains}
     responses = [{"item_id": item_id, "answer": "right", "response_time_ms": 4000} for item_id in item_domains]
 
     result = score_domains(responses, item_domains, item_keys)
 
-    assert result.composite == 100
-    assert result.iq_score == 130
+    assert result.composite == 94
+    assert result.iq_score == 127
     assert result.iq_score_kind == "experimental_iq_style_estimate"
     assert result.iq_score_scale == "70_130_uncalibrated_reference"
 
@@ -80,9 +80,9 @@ def test_quality_flags_rapid_and_interruptions():
 
 def test_question_bank_has_balanced_complete_forms_and_hides_keys():
     form = create_randomized_form("complete")
-    assert len(ITEMS) == 840
-    assert len(form) == 48
-    assert len(set(form)) == 48
+    assert len(ITEMS) == 600
+    assert len(form) == 40
+    assert len(set(form)) == 40
     assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
     families_by_domain = {}
     for item_id in form:
@@ -101,9 +101,9 @@ def test_question_bank_randomizes_between_sessions():
 
 def test_question_bank_has_reviewable_generation_metadata():
     generated = [item for item in ITEMS.values() if item.get("data_origin") == "ORIGINAL_GENERATED"]
-    assert len(generated) == 700
+    assert len(generated) == 500
     assert set(Counter(item["domain"] for item in generated).values()) == {100}
-    assert len({item["prompt"] for item in generated}) >= 600
+    assert len({item["prompt"] for item in generated}) >= 400
     assert all(item["status"] == "PILOT" for item in generated)
     assert all(item["type"] == "memory" or item["options"].count(item["answer"]) == 1 for item in generated)
     assert all(item["generation_run_id"] for item in generated)
@@ -113,7 +113,7 @@ def test_question_bank_has_reviewable_generation_metadata():
 def test_session_has_timed_contract_and_persists_real_metrics():
     session = create_session("iaq-cognitive", SessionCreate())
     assert session["duration_seconds"] == DURATION_SECONDS
-    assert session["question_count"] == 48
+    assert session["question_count"] == 40
     started = start_session(session["id"])
     first = started["next_item"]
     if first.get("type") == "memory":

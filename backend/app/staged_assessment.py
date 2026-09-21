@@ -20,7 +20,7 @@ STAGED_DOMAINS = {
     "numerical_reasoning",
     "verbal_reasoning",
     "visual_spatial_reasoning",
-    "working_memory",
+    # Processing speed is inferred from timing in the scored product.
 }
 
 

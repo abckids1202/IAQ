@@ -6,7 +6,7 @@ export type Domain =
   | 'Numerical reasoning'
   | 'Verbal reasoning'
   | 'Visual-spatial reasoning'
-  | 'Working memory'
+  | 'Processing speed'
 
 export type Question = {
   id: string

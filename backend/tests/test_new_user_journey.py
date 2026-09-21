@@ -18,12 +18,12 @@ def test_new_user_can_register_test_unlock_and_continue():
     session_response = client.post("/assessments/iaq-cognitive/sessions", json={"mode": "complete"}, headers=headers)
     assert session_response.status_code == 200
     session_id = session_response.json()["id"]
-    assert session_response.json()["question_count"] == 48
+    assert session_response.json()["question_count"] == 40
 
     started = client.post(f"/sessions/{session_id}/start", headers=headers)
     assert started.status_code == 200
 
-    for presented_order in range(48):
+    for presented_order in range(40):
         item_response = client.get(f"/sessions/{session_id}/next-item", headers=headers)
         assert item_response.status_code == 200
         item = item_response.json()

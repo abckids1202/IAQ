@@ -3,18 +3,11 @@ from fastapi.testclient import TestClient
 from app.main import ITEMS, app, public_item, runtime_readiness
 
 
-def test_memory_items_hide_the_stimulus_from_the_prompt_but_keep_a_transient_visual():
-    memory_items = [item for item in ITEMS.values() if item["domain"] == "working_memory" and not item.get("memory_protocol_incomplete")]
-    incomplete_items = [item for item in ITEMS.values() if item["domain"] == "working_memory" and item.get("memory_protocol_incomplete")]
-    assert len(memory_items) >= 8
-    assert incomplete_items
-    for item in memory_items:
-        payload = public_item(item)
-        assert "answer" not in payload
-        assert "answer_index" not in payload
-        assert "memory_stimulus" not in payload
-        assert payload.get("visual")
-        assert str(item["answer"]) not in payload["prompt"]
+def test_working_memory_is_not_part_of_the_scored_product():
+    domains = {item["domain"] for item in ITEMS.values()}
+    assert "working_memory" not in domains
+    assert "processing_speed" not in domains
+    assert all(item["domain"] != "working_memory" for item in ITEMS.values())
 
 
 def test_development_preflight_does_not_claim_production_ready():
