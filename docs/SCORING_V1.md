@@ -13,12 +13,12 @@ The service returns `score_version=IAQ-PROVISIONAL-ACCURACY-1` and `score_kind=p
 
 ## Experimental IQ-style display score
 
-The app also returns `iq_score` for a complete seven-domain form. It is shown to
+The app also returns `iq_score` for a complete six-domain form. It is shown to
 students as **IAQ IQ score · experimental** on a familiar 100/15 display
 convention. This is a transparent reference transform, not a normed IQ result:
 
 ```text
-iq_score = round(70 + (seven_domain_mean × 0.60))
+iq_score = round(70 + (six_domain_mean × 0.60))
 ```
 
 The number is withheld when any domain has fewer than four scored items. It does

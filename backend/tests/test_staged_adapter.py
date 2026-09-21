@@ -37,3 +37,18 @@ def test_staged_verbal_item_separates_passage_from_the_question():
     assert item["prompt"] == candidate["question"]
     assert item["helper"] == candidate["context"]
     assert len(item["options"]) == 4
+
+
+def test_staged_verbal_item_removes_a_repeated_passage_prefix():
+    candidate = {
+        "id": "verbal-repeat",
+        "domain": "verbal_reasoning",
+        "question": "A short passage. Which conclusion follows?",
+        "context": "A short passage.",
+        "options": ["A", "B", "C", "D"],
+        "answer_index": 0,
+    }
+    item = staged_assessment._choice_item(candidate)
+
+    assert item["prompt"] == "Which conclusion follows?"
+    assert item["helper"] == "A short passage."

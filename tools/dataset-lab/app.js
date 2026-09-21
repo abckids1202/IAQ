@@ -331,8 +331,9 @@ function renderItem(item) {
   const isVisualItem = item.presentation_mode === 'visual_labels' || item.kind === 'visual'
   setText('question-dataset', `${item.dataset_label} · ${item.presentation_mode}`)
   const questionTitle = $('question-title')
-  questionTitle.classList.toggle('hidden', isVisualItem)
-  questionTitle.textContent = isVisualItem ? '' : (item.prompt || 'Untitled question')
+  const imageIncludesInstructions = isVisualItem && item.dataset !== 'abstract'
+  questionTitle.classList.toggle('hidden', imageIncludesInstructions)
+  questionTitle.textContent = imageIncludesInstructions ? '' : (item.prompt || 'Untitled question')
   setText('question-index', item.id)
   setText('answer-instruction', item.presentation_mode.startsWith('memory_') ? 'Recall response' : 'Choose one answer')
   $('answer-state').textContent = 'Not answered'

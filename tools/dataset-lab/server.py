@@ -14,11 +14,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import random
+import sys
 import urllib.parse
 from typing import Any, Dict, Iterable, List, Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+from app.question_presentation import render_matrix_svg, validate_matrix, verbal_question
+
 DATA_ROOT = PROJECT_ROOT / "data" / "assessment"
 HOST = "127.0.0.1"
 PORT = 8787
@@ -46,6 +50,7 @@ CONTENT_ISSUE_PREFIXES = {
     "answer_index_out_of_range",
     "answer_and_answer_index_disagree",
     "image_missing_or_unresolved",
+    "matrix_stimulus_invalid",
     "memory_protocol_incomplete",
     "memory_response_type_invalid",
     "memory_stimulus_invalid",
@@ -195,6 +200,11 @@ def _load() -> None:
         for record in records:
             record["_dataset"] = dataset
             record["_issues"] = _issues(record, dataset)
+            if dataset == "abstract":
+                try:
+                    validate_matrix(record.get("stimulus"), record.get("options"))
+                except ValueError:
+                    record["_issues"].append("matrix_stimulus_invalid")
             RECORDS.setdefault(dataset, []).append(record)
             if record.get("id"):
                 BY_ID.setdefault(str(record["id"]), record)
@@ -204,6 +214,7 @@ def _public_record(record: Dict[str, Any], locale: str = "en") -> Dict[str, Any]
     dataset = str(record["_dataset"])
     asset = _asset_for(record, dataset)
     prompt = record.get("question_id") if locale == "id" and record.get("question_id") else record.get("question", "")
+    prompt = verbal_question(prompt, record.get("context")) if dataset == "verbal" else prompt
     presentation_mode = _presentation_mode(dataset, record)
     issues = record.get("_issues", [])
     buckets = _issue_buckets(issues)
@@ -225,7 +236,7 @@ def _public_record(record: Dict[str, Any], locale: str = "en") -> Dict[str, Any]
         "options": [] if presentation_mode in {"visual_labels", "memory_sequence", "memory_grid", "memory_incomplete"} else options,
         "stimulus": None if dataset == MEMORY_DATASET else record.get("stimulus"),
         "protocol": record.get("protocol"),
-        "image_url": f"/assets/{dataset}/{urllib.parse.quote(asset.name)}" if asset else None,
+        "image_url": (f"/stimuli/{urllib.parse.quote(str(record['id']), safe='')}.svg" if "matrix_stimulus_invalid" not in issues else None) if dataset == "abstract" else (f"/assets/{dataset}/{urllib.parse.quote(asset.name)}" if asset else None),
         "review_status": record.get("review_status", "unknown"),
         "calibrated": record.get("calibrated", False),
         "commercial_use_approved": record.get("commercial_use_approved", False),
@@ -348,6 +359,25 @@ class Handler(BaseHTTPRequestHandler):
                     "order_mode": "set_selection",
                 }
             _json_response(self, {"id": item_id, "recall": recall})
+            return
+        if parsed.path.startswith("/stimuli/") and parsed.path.endswith(".svg"):
+            item_id = urllib.parse.unquote(parsed.path[len("/stimuli/"):-4])
+            record = BY_ID.get(item_id)
+            if not record or record.get("_dataset") != "abstract":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                body = render_matrix_svg(record.get("stimulus"), record.get("options")).encode("utf-8")
+            except ValueError:
+                self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path.startswith("/assets/"):
             parts = parsed.path.split("/", 3)

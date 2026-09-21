@@ -50,13 +50,13 @@ def test_unsigned_first_visit_is_guest_not_demo_student(monkeypatch):
         headers=headers,
     )
     assert identity.status_code == 200
-    assert identity.json()["session_token"]
-    assert identity.json()["user"]["is_guest"] is False
-    upgraded_headers = {"X-IAQ-Session": identity.json()["session_token"]}
+    assert identity.json()["session_token"] is None
+    assert identity.json()["user"]["is_guest"] is True
+    upgraded_headers = headers
     upgraded = client.get("/me", headers=upgraded_headers)
     assert upgraded.status_code == 200
     assert upgraded.json()["email"] == email
-    assert upgraded.json()["roles"] == ["student"]
+    assert upgraded.json()["roles"] == ["guest"]
 
     # Keep the in-memory test provider repeatable and avoid leaving fake users.
     access.SESSIONS.pop(token, None)

@@ -1,4 +1,6 @@
-from app.main import ITEMS, public_item, runtime_readiness
+from fastapi.testclient import TestClient
+
+from app.main import ITEMS, app, public_item, runtime_readiness
 
 
 def test_memory_items_hide_the_stimulus_from_the_prompt_but_keep_a_transient_visual():
@@ -45,3 +47,18 @@ def test_production_preflight_does_not_trust_access_store_flag(monkeypatch):
     readiness = runtime_readiness()
     assert readiness["checks"]["commerce_persistence"] is False
     assert "commerce_persistence" in readiness["blockers"]
+
+
+def test_production_readiness_probe_fails_closed(monkeypatch):
+    monkeypatch.setenv("IAQ_ENV", "production")
+    monkeypatch.setenv("IAQ_REQUIRE_REVIEWED_ITEMS", "true")
+    monkeypatch.setenv("IAQ_ACCESS_STORE", "memory")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_JWKS_URL", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "needs_configuration"

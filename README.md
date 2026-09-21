@@ -7,15 +7,15 @@ IAQ is a V1.0 baseline for a cognitive, aptitude, interest, and academic-directi
 ## What is included
 
 - React + TypeScript + Vite product shell with editorial dashboard UI.
-- Student flow: a results-first seven-domain cognitive session, a server-enforced 35-minute timer, Compass, Tracker, evidence prompts, saved majors, and a private printable report.
-- Question bank: 840 pilot items, with 120 deterministic/reviewable candidates in each intelligence aspect. A complete test selects 8 items per aspect (56 total), avoids duplicate item families within a session, and randomizes the order for every session.
+- Student flow: a results-first six-domain cognitive session, a server-enforced 35-minute timer, Compass, Tracker, evidence prompts, saved majors, and a private printable report.
+- Question bank: pilot candidates across six scored domains. A complete test selects 8 items per domain (48 total), avoids duplicate item families within a session, and randomizes the order for every session.
 - Counselor workspace with consent-aware student states and anonymized cohort summaries.
 - Administrator item studio with lifecycle states, item health flags, response counts, and protected answer-key preview.
 - Staged research catalog: 34k+ supplied candidates and linked five-domain images are kept server-side under `data/assessment`, with a reviewer-only slice, provenance/licence view, two-reviewer checklist, and no student eligibility until release gates pass.
 - FastAPI service boundary with server-side response scoring, idempotent response submission, session events, RIASEC scoring, transparent major matching, tracker endpoints, and role-oriented endpoints.
 - PostgreSQL-backed assessment/session/result persistence when `IAQ_DATABASE_URL` is configured, plus dependency-light local demo behavior.
-- Provider-neutral identity and commerce workflow: development sign-in for each role, server-side permission maps, backend-driven IDR products, order snapshots, mock hosted-checkout state, verified sandbox settlement, and explicit entitlements.
-- Optional account, pricing, checkout, payment-status, billing, and settings routes. Production Supabase/Google/Midtrans activation remains disabled until credentials, merchant approval, MFA, consent, and legal review are complete.
+- Provider-neutral identity and commerce workflow: development sign-in for each role, server-side permission maps, backend-driven IDR products, order snapshots, manually reviewed BCA QRIS proofs, and explicit per-result entitlements.
+- Optional account, pricing, checkout, payment-status, billing, and settings routes. Production Supabase/Google/manual-QRIS activation remains gated until credentials, merchant setup, MFA, consent, and legal review are complete.
 - Results integrity workflow: an empty results state (no demo score), incomplete domains remain “not assessed,” optional interest check-in persistence, private completion certificates with a minimal public verification response, and development-only report-delivery status.
 - Optional OpenAI-assisted interpretation: a server-only adapter can explain an already-scored report and add cautious direction context. It never scores answers, activates items, changes deterministic matches, or produces an official IQ claim.
 - Product, assessment, privacy, pilot, deployment, and data dictionary documentation in `docs/`.
@@ -41,7 +41,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-For the local access workflow, copy `.env.example` to `.env` if desired and keep `IAQ_AUTH_MODE=development`. The first visit opens the public site unsigned-in. Choose `Start test` to receive a browser-scoped guest session, or open `/auth/login` to use a seeded role or create a student account with the development email code. See [docs/TEST_ACCOUNTS.md](docs/TEST_ACCOUNTS.md) for the complete smoke-test flow. The student account has development assessment access; the guardian account can create a sandbox purchase for `demo-student`. Payment access is granted only after clicking the sandbox settlement action and receiving the server-confirmed `fulfilled` state.
+For the local access workflow, copy `.env.example` to `.env` if desired and keep `IAQ_AUTH_MODE=development`. The first visit opens the public site unsigned-in. Choose `Start test` to receive a browser-scoped guest session, or open `/auth/login` to use a seeded role or create a student account with the development email code. See [docs/TEST_ACCOUNTS.md](docs/TEST_ACCOUNTS.md) for the complete smoke-test flow. In local automated tests, the mock settlement shortcut can create a fulfilled order; the production path is the manual BCA QRIS proof workflow and admin approval.
 
 PostgreSQL (recommended for durable sessions and results):
 
@@ -59,6 +59,8 @@ psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/009_dataset_a
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/010_production_hardening.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/011_score_and_session_metadata.sql
 psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/012_experimental_iq_score.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/013_guest_and_manual_payment_persistence.sql
+psql postgresql://iaq:iaq@localhost:5432/iaq -f backend/migrations/014_iq_score_metadata.sql
 cd backend
 $env:IAQ_DATABASE_URL = 'postgresql+psycopg://iaq:iaq@localhost:5432/iaq'  # PowerShell
 python -m app.seed
@@ -90,7 +92,7 @@ default. Keep the research folders under `data/assessment`; the equivalent
 explicit settings are `IAQ_ASSESSMENT_SOURCE=staged` and
 `IAQ_ALLOW_STAGED_ITEMS=true` in the backend environment. This combines the
 five visual/memory banks and English verbal research records with the authored
-processing-speed bank, preserves the 56-question balanced form, serves visual
+processing-speed bank for research only, preserves the 48-question balanced form, serves visual
 stimuli from the backend, and provides the ordered-sequence or cell-grid memory
 recall UI. This is QA-only: staged records remain unreviewed and must not be
 enabled in production or presented as official IQ content. Production stays on
@@ -146,7 +148,7 @@ Production must replace demo mode with token validation and server-side role che
 
 Before switching `IAQ_ENV=production`, call `GET /ready`. The endpoint lists
 configuration blockers for persistence, Supabase auth, reviewed-item gating,
-Midtrans live checkout, Resend delivery, and the deployed app URL without
+payment, Resend delivery, and the deployed app URL without
 returning secrets.
 
 ## Scientific boundary

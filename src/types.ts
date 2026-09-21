@@ -11,6 +11,7 @@ export type Domain =
 export type Question = {
   id: string
   domain: Domain
+  displayDomain?: string
   type: 'choice' | 'sequence' | 'memory' | 'speed'
   prompt: string
   helper?: string

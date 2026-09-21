@@ -13,15 +13,28 @@ import random
 import re
 import hashlib
 import json
-import hmac
 import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+from functools import wraps
+from threading import RLock
+
+# Serialize read/check/write transitions in the single-process local pilot.
+# This is not a replacement for transactional database locks in production.
+FLOW_LOCK = RLock()
+
+
+def serialized_flow(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with FLOW_LOCK:
+            return function(*args, **kwargs)
+    return locked
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -42,6 +55,7 @@ from .question_bank import MINIMUM_ITEMS_PER_DOMAIN, TARGET_ITEMS_PER_DOMAIN, RE
 from .persistence import PostgresAssessmentStore
 from . import access, ai, dataset_audit, email_delivery, evaluation, external_data, payments, review, supabase_auth
 from . import staged_assessment
+from .question_presentation import render_matrix_svg
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -99,6 +113,15 @@ PERSISTENCE = PostgresAssessmentStore(DATABASE_URL) if DATABASE_URL else None
 # authored Postgres item tables. Keep staged QA sessions/results in process
 # memory until an external-catalog persistence adapter is implemented.
 ASSESSMENT_PERSISTENCE = bool(PERSISTENCE) and ASSESSMENT_SOURCE != "staged"
+if PERSISTENCE:
+    try:
+        persisted_qris = PERSISTENCE.get_qris_settings()
+        if persisted_qris:
+            QRIS_SETTINGS.update(persisted_qris)
+    except Exception:
+        # An old local database may not have migration 013 yet. Keep startup
+        # usable and let the readiness endpoint expose the missing gate.
+        pass
 
 MAJORS = [
     {"id": "cs", "slug": "computer-science", "name": "Computer Science", "family": "Technology & systems", "vector": {"abstract_reasoning": .9, "deductive_logic": .9, "numerical_reasoning": .8}},
@@ -203,6 +226,7 @@ class OtpVerifyCreate(BaseModel):
 
 class OrderCreate(BaseModel):
     product_id: str = Field(min_length=2, max_length=80)
+    result_id: Optional[str] = Field(default=None, min_length=8, max_length=80)
     beneficiary_user_id: Optional[str] = Field(default=None, min_length=2, max_length=120)
     school_id: Optional[str] = Field(default=None, min_length=2, max_length=120)
 
@@ -268,9 +292,27 @@ def current_user(request: Optional[Request] = None) -> Dict[str, Any]:
     guest_user = access.user_for_token(token)
     if guest_user and guest_user.get("is_guest"):
         return guest_user
+    if token and token.startswith("iaq-guest-") and PERSISTENCE:
+        try:
+            persisted_guest = PERSISTENCE.get_guest_user(token)
+        except Exception:
+            # A missing/unapplied production migration must fail closed rather
+            # than silently treating an unknown token as an account.
+            persisted_guest = None
+        if persisted_guest:
+            return persisted_guest
     if auth_mode == "supabase":
         try:
-            return supabase_auth.user_from_token(token or "")
+            user = supabase_auth.user_from_token(token or "")
+            if PERSISTENCE:
+                try:
+                    roles = user.get("roles") or ["student"]
+                    PERSISTENCE.ensure_user(user["id"], user.get("email", ""), user.get("display_name", "IAQ student"), user.get("age_band", "unknown"), roles[0])
+                except Exception as error:
+                    # A valid provider token without an application profile
+                    # must not reach durable result or commerce endpoints.
+                    raise HTTPException(503, "Account provisioning is temporarily unavailable") from error
+            return user
         except supabase_auth.SupabaseAuthError as error:
             raise HTTPException(401, str(error)) from error
     user = access.user_for_token(token)
@@ -348,7 +390,10 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
         raise HTTPException(503, "Production assessments require PostgreSQL persistence")
     if os.getenv("IAQ_ENV", "development").lower() == "production" and mode != "practice" and os.getenv("IAQ_REQUIRE_REVIEWED_ITEMS", "false").lower() != "true":
         raise HTTPException(503, "Production assessments require the reviewed-item release gate")
-    per_domain = 8 if mode == "complete" else 2
+    # Every assessment-shaped flow uses the same complete six-domain form.
+    # Practice is ephemeral and unscored, but it still contains all 48 items
+    # so participants never see a misleading 12-question test.
+    per_domain = 8
     staged_default = "true" if os.getenv("IAQ_ENV", "development").lower() != "production" else "false"
     allow_staged = ASSESSMENT_SOURCE == "staged" and os.getenv("IAQ_ALLOW_STAGED_ITEMS", staged_default).lower() == "true" and os.getenv("IAQ_ENV", "development").lower() != "production"
     def structurally_valid(item: Dict[str, Any]) -> bool:
@@ -368,6 +413,8 @@ def create_randomized_form(mode: str, language: str = "en") -> List[str]:
             )
             return has_four_options and (bool(item.get("image_url")) or legacy_smoke_item)
         if item.get("type") == "memory":
+            if item.get("memory_protocol_incomplete"):
+                return False
             response_type = item.get("memory_response_type")
             answer = item.get("answer")
             return response_type in {"ordered_sequence", "cell_set"} and bool(item.get("memory_input_length")) and answer not in {None, "", "[]"}
@@ -454,8 +501,12 @@ def runtime_readiness() -> Dict[str, Any]:
 
 
 @app.get("/ready")
-def ready() -> Dict[str, Any]:
-    return runtime_readiness()
+def ready() -> JSONResponse:
+    readiness = runtime_readiness()
+    # Keep the diagnostic payload available to deploy tooling, but make an
+    # unsafe production configuration fail an actual readiness probe.
+    status_code = 200 if readiness["status"] == "ready" else 503
+    return JSONResponse(status_code=status_code, content=readiness)
 
 
 @app.get("/auth/config")
@@ -481,6 +532,9 @@ def guest_login() -> Dict[str, Any]:
     if os.getenv("IAQ_GUEST_ASSESSMENT_ENABLED", enabled_default).lower() != "true":
         raise HTTPException(403, "Guest assessment access is disabled. Sign in or create an account to continue.")
     token, user = access.issue_guest_session()
+    if PERSISTENCE:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        PERSISTENCE.store_guest_session(user["id"], token, expires_at, user["email"], user["display_name"])
     return {"session_token": token, "user": access.public_user(user), "permissions": access.permissions_for(user), "provider": "guest"}
 
 
@@ -501,6 +555,8 @@ def dev_login(payload: DevLoginCreate) -> Dict[str, Any]:
 
 @app.post("/auth/otp/request")
 def request_otp(payload: OtpRequestCreate) -> Dict[str, Any]:
+    if os.getenv("IAQ_AUTH_MODE", "development") != "development":
+        raise HTTPException(404, "Use the configured authentication provider")
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.email):
         raise HTTPException(422, "Enter a valid email address")
     # The local provider uses a fixed test code and never sends real email.
@@ -513,6 +569,8 @@ def request_otp(payload: OtpRequestCreate) -> Dict[str, Any]:
 
 @app.post("/auth/otp/verify")
 def verify_otp(payload: OtpVerifyCreate) -> Dict[str, Any]:
+    if os.getenv("IAQ_AUTH_MODE", "development") != "development":
+        raise HTTPException(404, "Use the configured authentication provider")
     record = access.OTP_CODES.get(payload.email.lower())
     if not record or record["expires_at"] <= datetime.now(timezone.utc) or payload.code != record["code"]:
         raise HTTPException(401, "That sign-in code is invalid or expired")
@@ -545,13 +603,29 @@ def me_permissions(request: Request) -> Dict[str, Any]:
 @app.get("/me/entitlements")
 def me_entitlements(request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    return {"entitlements": [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == user["id"]]}
+    entitlements = [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == user["id"]]
+    if PERSISTENCE:
+        try:
+            persisted = PERSISTENCE.list_entitlements_for_user(user["id"])
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in entitlements}
+        entitlements.extend(item for item in persisted if item["id"] not in known)
+    return {"entitlements": entitlements}
 
 
 @app.get("/me/orders")
 def me_orders(request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    return {"orders": [serialize_order(order) for order in access.orders_for(user["id"])]}
+    orders = access.orders_for(user["id"])
+    if PERSISTENCE:
+        try:
+            persisted = PERSISTENCE.list_orders_for_user(user["id"])
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in orders}
+        orders.extend(item for item in persisted if item["id"] not in known)
+    return {"orders": [serialize_order(order) for order in orders]}
 
 
 @app.get("/products")
@@ -568,15 +642,41 @@ def product(product_id: str) -> Dict[str, Any]:
 
 
 @app.post("/orders")
+@serialized_flow
 def create_order(payload: OrderCreate, request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    require_permission(user, "order.self.create")
+    guest_identity = guest_identity_for(payload.result_id)
+    guest_identity_active = bool(guest_identity and datetime.now(timezone.utc) < datetime.fromisoformat(guest_identity["expires_at"]))
+    if not (user.get("is_guest") and guest_identity_active and guest_identity.get("user_id") == user["id"]):
+        require_permission(user, "order.self.create")
+    if payload.product_id == "iaq-complete":
+        if not payload.result_id:
+            raise HTTPException(422, "Choose a completed test to unlock")
+        result = _result_record(payload.result_id, request)
+        if result.get("user_id") != user["id"] or payload.beneficiary_user_id not in {None, user["id"]}:
+            raise HTTPException(404, "Result not found")
+        if result.get("iq_score") is None:
+            raise HTTPException(409, "This result has insufficient scoring evidence; do not pay for an incomplete report")
+        if has_full_report_access(user["id"], payload.result_id):
+            raise HTTPException(409, "This report is already unlocked")
+        if PERSISTENCE:
+            try:
+                existing = PERSISTENCE.get_order_for_result(user["id"], payload.result_id)
+            except Exception:
+                existing = None
+            if existing:
+                access.ORDERS[existing["id"]] = existing
+                return serialize_order(existing)
+        for existing in access.ORDERS.values():
+            if existing.get("result_id") == payload.result_id and existing.get("purchaser_user_id") == user["id"] and existing["status"] in {"awaiting_payment", "proof_submitted", "payment_proof_rejected"}:
+                return serialize_order(existing)
     try:
-        order = access.create_order(user["id"], payload.product_id, payload.beneficiary_user_id, payload.school_id)
+        order = access.create_order(user["id"], payload.product_id, payload.beneficiary_user_id, payload.school_id, payload.result_id)
     except PermissionError as error:
         raise HTTPException(403, str(error))
     except ValueError as error:
         raise HTTPException(422, str(error))
+    persist_order(order)
     return serialize_order(order)
 
 
@@ -585,9 +685,27 @@ def _authorized_order(order: Dict[str, Any], user: Dict[str, Any]) -> None:
         raise HTTPException(404, "Order not found")
 
 
+def order_for(order_id: str) -> Optional[Dict[str, Any]]:
+    order = access.ORDERS.get(order_id)
+    if order or not PERSISTENCE:
+        return order
+    try:
+        order = PERSISTENCE.get_order(order_id)
+    except Exception:
+        order = None
+    if order:
+        access.ORDERS[order_id] = order
+    return order
+
+
+def persist_order(order: Dict[str, Any]) -> None:
+    if PERSISTENCE:
+        PERSISTENCE.store_order(order)
+
+
 @app.get("/orders/{order_id}")
 def get_order(order_id: str, request: Request) -> Dict[str, Any]:
-    order = access.ORDERS.get(order_id)
+    order = order_for(order_id)
     if not order:
         raise HTTPException(404, "Order not found")
     _authorized_order(order, current_user(request))
@@ -597,7 +715,7 @@ def get_order(order_id: str, request: Request) -> Dict[str, Any]:
 @app.post("/orders/{order_id}/checkout")
 def checkout_order(order_id: str, request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    order = access.ORDERS.get(order_id)
+    order = order_for(order_id)
     if not order:
         raise HTTPException(404, "Order not found")
     _authorized_order(order, user)
@@ -608,6 +726,7 @@ def checkout_order(order_id: str, request: Request) -> Dict[str, Any]:
     attempt = access.create_payment_attempt(order_id)
     attempt["provider"] = "manual_qris"
     attempt["updated_at"] = NOW()
+    persist_order(order)
     return {"order": serialize_order(order), "payment_attempt": attempt, "qris": {"merchant_name": QRIS_SETTINGS["merchant_name"], "instructions": QRIS_SETTINGS["instructions"], "image_available": bool(QRIS_SETTINGS["image_bytes"]), "image_url": "/payment-settings/qris/image" if QRIS_SETTINGS["image_bytes"] else None}, "message": "Scan the QRIS, pay the exact amount, then upload your receipt. Access is unlocked only after admin verification."}
 
 
@@ -625,7 +744,7 @@ def qris_image() -> Response:
 
 @app.post("/orders/{order_id}/payment-proof")
 async def submit_payment_proof(order_id: str, receipt: UploadFile = File(...), transaction_ref: Optional[str] = None, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"), request: Request = None) -> Dict[str, Any]:
-    order = access.ORDERS.get(order_id)
+    order = order_for(order_id)
     if not order:
         raise HTTPException(404, "Order not found")
     user = current_user(request)
@@ -634,10 +753,24 @@ async def submit_payment_proof(order_id: str, receipt: UploadFile = File(...), t
         raise HTTPException(403, "Only the purchaser can submit payment proof")
     if order["status"] == "fulfilled":
         return {"accepted": True, "status": "fulfilled", "order_id": order_id}
+    if order["status"] == "proof_submitted":
+        raise HTTPException(409, "A payment proof for this order is already under review")
+    if order["status"] not in {"awaiting_payment", "payment_proof_rejected"}:
+        raise HTTPException(409, "This order cannot accept payment proof in its current state")
     if receipt.content_type not in {"image/png", "image/jpeg", "image/webp", "application/pdf"}:
         raise HTTPException(415, "Upload a PNG, JPG, WEBP, or PDF receipt")
     if idempotency_key and idempotency_key in PAYMENT_PROOFS:
-        return {"accepted": True, **{key: value for key, value in PAYMENT_PROOFS[idempotency_key].items() if key != "content"}}
+        previous = PAYMENT_PROOFS[idempotency_key]
+        if previous["order_id"] != order_id or previous["user_id"] != user["id"]:
+            raise HTTPException(409, "This idempotency key belongs to another payment request")
+        return {"accepted": True, **{key: value for key, value in previous.items() if key != "content"}}
+    if idempotency_key and PERSISTENCE:
+        previous = PERSISTENCE.get_payment_proof_by_idempotency(idempotency_key)
+        if previous:
+            if previous["order_id"] != order_id or previous["user_id"] not in {user["id"], PERSISTENCE._db_user_id(user["id"])}:
+                raise HTTPException(409, "This idempotency key belongs to another payment request")
+            PAYMENT_PROOFS[idempotency_key] = previous
+            return {"accepted": True, **{key: value for key, value in previous.items() if key != "content"}}
     content = await receipt.read(5 * 1024 * 1024 + 1)
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(413, "Payment receipts must be 5 MB or smaller")
@@ -646,6 +779,9 @@ async def submit_payment_proof(order_id: str, receipt: UploadFile = File(...), t
     PAYMENT_PROOFS[idempotency_key or f"proof:{proof_id}"] = proof
     order["status"] = "proof_submitted"
     order["updated_at"] = NOW()
+    persist_order(order)
+    if PERSISTENCE:
+        PERSISTENCE.store_payment_proof(proof, content, idempotency_key or f"proof:{proof_id}")
     access.record_audit(user["id"], "payment.proof_submitted", "order", order_id, {"proof_id": proof_id})
     return {"accepted": True, "id": proof_id, "order_id": order_id, "status": proof["status"], "created_at": proof["created_at"]}
 
@@ -653,32 +789,55 @@ async def submit_payment_proof(order_id: str, receipt: UploadFile = File(...), t
 @app.get("/admin/payment-proofs")
 def admin_payment_proofs(request: Request) -> Dict[str, Any]:
     require_permission(current_user(request), "admin.payments.read")
-    return {"proofs": [{key: value for key, value in proof.items() if key != "content"} for proof in PAYMENT_PROOFS.values()]}
+    proofs = list(PAYMENT_PROOFS.values())
+    if PERSISTENCE:
+        persisted = [proof for proof in PERSISTENCE.list_payment_proofs() if proof]
+        known = {proof["id"] for proof in proofs}
+        proofs.extend(proof for proof in persisted if proof["id"] not in known)
+    return {"proofs": [{key: value for key, value in proof.items() if key != "content"} for proof in proofs]}
 
 
 @app.post("/admin/payment-proofs/{proof_id}/approve")
+@serialized_flow
 def approve_payment_proof(proof_id: str, payload: PaymentProofDecision, request: Request) -> Dict[str, Any]:
     admin = current_user(request)
     require_permission(admin, "admin.entitlements.manage")
     proof = next((value for value in PAYMENT_PROOFS.values() if value["id"] == proof_id), None)
+    if not proof and PERSISTENCE:
+        proof = PERSISTENCE.get_payment_proof(proof_id)
+        if proof:
+            PAYMENT_PROOFS[f"persisted:{proof_id}"] = proof
     if not proof:
         raise HTTPException(404, "Payment proof not found")
     if proof["status"] == "approved":
-        return {"approved": True, "order": serialize_order(access.ORDERS[proof["order_id"]])}
+        order = order_for(proof["order_id"])
+        return {"approved": True, "order": serialize_order(order)} if order else {"approved": True, "status": "approved"}
     if proof["status"] != "under_review":
         raise HTTPException(409, "This payment proof is no longer awaiting review")
-    order = access.ORDERS[proof["order_id"]]
+    order = order_for(proof["order_id"])
+    if not order:
+        raise HTTPException(404, "Order not found")
     proof.update({"status": "approved", "note": payload.note, "reviewed_by": admin["id"], "updated_at": NOW()})
     access.fulfill_order(order["id"], "manual_qris_admin_verified")
+    persist_order(order)
+    if PERSISTENCE:
+        product = access.PRODUCTS[order["product_id"]]
+        PERSISTENCE.store_entitlements_for_order(order, [product["entitlement_code"], product["report_code"]], admin["id"])
+        PERSISTENCE.update_payment_proof(proof_id, "approved", proof["note"], admin["id"])
     access.record_audit(admin["id"], "payment.proof_approved", "payment_proof", proof_id, {"order_id": order["id"]})
     return {"approved": True, "order": serialize_order(order)}
 
 
 @app.post("/admin/payment-proofs/{proof_id}/reject")
+@serialized_flow
 def reject_payment_proof(proof_id: str, payload: PaymentProofDecision, request: Request) -> Dict[str, Any]:
     admin = current_user(request)
     require_permission(admin, "admin.entitlements.manage")
     proof = next((value for value in PAYMENT_PROOFS.values() if value["id"] == proof_id), None)
+    if not proof and PERSISTENCE:
+        proof = PERSISTENCE.get_payment_proof(proof_id)
+        if proof:
+            PAYMENT_PROOFS[f"persisted:{proof_id}"] = proof
     if not proof:
         raise HTTPException(404, "Payment proof not found")
     if proof["status"] == "rejected":
@@ -686,8 +845,14 @@ def reject_payment_proof(proof_id: str, payload: PaymentProofDecision, request: 
     if proof["status"] != "under_review":
         raise HTTPException(409, "This payment proof is no longer awaiting review")
     proof.update({"status": "rejected", "note": payload.note, "reviewed_by": admin["id"], "updated_at": NOW()})
-    access.ORDERS[proof["order_id"]]["status"] = "payment_proof_rejected"
-    access.ORDERS[proof["order_id"]]["updated_at"] = NOW()
+    order = order_for(proof["order_id"])
+    if not order:
+        raise HTTPException(404, "Order not found")
+    order["status"] = "payment_proof_rejected"
+    order["updated_at"] = NOW()
+    persist_order(order)
+    if PERSISTENCE:
+        PERSISTENCE.update_payment_proof(proof_id, "rejected", proof["note"], admin["id"])
     access.record_audit(admin["id"], "payment.proof_rejected", "payment_proof", proof_id, {"order_id": proof["order_id"]})
     return {"rejected": True, "status": proof["status"], "note": proof["note"]}
 
@@ -702,18 +867,28 @@ async def update_qris_settings(merchant_name: str, instructions: str, image: Upl
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(413, "QRIS images must be 2 MB or smaller")
     QRIS_SETTINGS.update({"merchant_name": merchant_name.strip()[:120] or "IAQ", "instructions": instructions.strip()[:500] or "Scan the QRIS, pay the exact amount, then upload your receipt.", "image_filename": image.filename, "image_bytes": content, "image_content_type": image.content_type})
+    if PERSISTENCE:
+        PERSISTENCE.store_qris_settings(QRIS_SETTINGS, admin["id"])
     access.record_audit(admin["id"], "payment.qris_updated", "payment_settings", "qris", {})
     return qris_settings()
 
 
 @app.get("/orders/{order_id}/status")
 def order_status(order_id: str, request: Request) -> Dict[str, Any]:
-    order = access.ORDERS.get(order_id)
+    order = order_for(order_id)
     if not order:
         raise HTTPException(404, "Order not found")
     _authorized_order(order, current_user(request))
     attempt = next((item for item in access.PAYMENT_ATTEMPTS.values() if item["order_id"] == order_id), None)
-    return {"order": serialize_order(order), "payment_attempt": attempt, "entitlements": [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == order["beneficiary_user_id"] and item["source_id"] == order_id]}
+    entitlements = [item for item in access.ENTITLEMENTS.values() if item["owner_id"] == order["beneficiary_user_id"] and item["source_id"] == order_id]
+    if PERSISTENCE:
+        try:
+            persisted = [item for item in PERSISTENCE.list_entitlements_for_user(order["beneficiary_user_id"]) if item.get("source_id") == order_id]
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in entitlements}
+        entitlements.extend(item for item in persisted if item["id"] not in known)
+    return {"order": serialize_order(order), "payment_attempt": attempt, "entitlements": entitlements}
 
 
 @app.post("/payments/mock/{order_id}/settle")
@@ -732,36 +907,10 @@ def settle_mock_payment(order_id: str, request: Request) -> Dict[str, Any]:
 
 @app.post("/payments/midtrans/notification")
 async def midtrans_notification(request: Request) -> Dict[str, Any]:
-    """Verify a sandbox notification before it can fulfill an order.
-
-    The payload follows Midtrans' notification fields. If no server key is
-    configured, notifications are rejected rather than silently trusted.
-    """
-    server_key = os.getenv("MIDTRANS_SERVER_KEY")
-    if not server_key:
-        raise HTTPException(503, "Midtrans sandbox is not configured")
-    payload = await request.json()
-    order_number = str(payload.get("order_id", ""))
-    status_code = str(payload.get("status_code", ""))
-    gross_amount = str(payload.get("gross_amount", ""))
-    signature = str(payload.get("signature_key", ""))
-    expected = hashlib.sha512(f"{order_number}{status_code}{gross_amount}{server_key}".encode()).hexdigest()
-    if not signature or not hmac.compare_digest(signature, expected):
-        raise HTTPException(400, "Invalid payment notification signature")
-    order = next((item for item in access.ORDERS.values() if item["order_number"] == order_number), None)
-    if not order:
-        raise HTTPException(404, "Unknown order reference")
-    if int(float(gross_amount)) != order["total_minor"] or payload.get("currency", order["currency"]) != order["currency"]:
-        raise HTTPException(400, "Payment amount or currency does not match the order")
-    transaction_status = str(payload.get("transaction_status", "unknown"))
-    event_key = f"midtrans:{payload.get('transaction_id', order_number)}:{transaction_status}"
-    if event_key not in access.PAYMENT_EVENTS:
-        access.PAYMENT_EVENTS[event_key] = {"id": event_key, "order_id": order["id"], "event_type": payload.get("transaction_status"), "signature_valid": True, "status": "processed", "received_at": NOW()}
-        if transaction_status in {"settlement", "capture"} and payload.get("fraud_status", "accept") == "accept" and order["status"] != "fulfilled":
-            access.fulfill_order(order["id"], "midtrans_payment")
-        elif transaction_status in {"cancel", "expire", "deny"} and order["status"] not in {"fulfilled", "paid"}:
-            order["status"] = transaction_status
-    return {"received": True, "processed": True, "order_status": order["status"]}
+    # This route remains only as an explicit migration response. IAQ uses
+    # manually reviewed BCA QRIS proofs; no third-party webhook may grant an
+    # entitlement in this release.
+    raise HTTPException(410, "Midtrans notifications are disabled; submit a manual QRIS proof instead")
 
 
 @app.get("/schools/{school_id}/seats")
@@ -810,7 +959,7 @@ def me(request: Request) -> Dict[str, Any]:
 @app.get("/assessments")
 def assessments() -> List[Dict[str, Any]]:
     available_languages = sorted({item.get("language", "en") for item in ITEMS.values() if item.get("language")})
-    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.4", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": QUESTION_COUNT, "questions_per_quick_form": len(DOMAINS) * 2, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": DOMAIN_QUOTA, "available_languages": available_languages, "default_language": "en", "score_kind": "provisional_domain_signal", "iq_score_kind": EXPERIMENTAL_IQ_SCORE_KIND, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": EXPERIMENTAL_IQ_SCORE_SCALE, "iq_score_method": EXPERIMENTAL_IQ_SCORE_METHOD, "official_iq_enabled": False}]
+    return [{"id": "iaq-cognitive", "name": "IAQ Cognitive Profile", "version": "IAQ-COG-0.4", "status": "experimental", "domains": list(DOMAINS), "question_bank_count": len(ITEMS), "questions_per_complete_form": QUESTION_COUNT, "questions_per_quick_form": len(DOMAINS) * 2, "duration_seconds": DURATION_SECONDS, "estimated_minutes": 35, "domain_quota": DOMAIN_QUOTA, "available_languages": available_languages, "default_language": "id", "scored_language": "en", "score_kind": "provisional_domain_signal", "iq_score_kind": EXPERIMENTAL_IQ_SCORE_KIND, "iq_score_label": EXPERIMENTAL_IQ_SCORE_LABEL, "iq_score_version": EXPERIMENTAL_IQ_SCORE_VERSION, "iq_score_scale": EXPERIMENTAL_IQ_SCORE_SCALE, "iq_score_method": EXPERIMENTAL_IQ_SCORE_METHOD, "official_iq_enabled": False}]
 
 
 def create_session(assessment_id: str, payload: SessionCreate, request: Request = None) -> Dict[str, Any]:
@@ -846,7 +995,7 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
         PERSISTENCE.create_session(session)
     else:
         SESSIONS[session_id] = session
-    return {"id": session_id, "assessment_version": payload.assessment_version, "language": payload.language, "age_band": payload.age_band, "mode": payload.mode, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": DOMAIN_QUOTA if payload.mode == "complete" else 2, "practice": session["ephemeral"]}
+    return {"id": session_id, "assessment_version": payload.assessment_version, "language": payload.language, "age_band": payload.age_band, "mode": payload.mode, "status": "created", "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "question_count": len(item_order), "domain_quota": DOMAIN_QUOTA, "practice": session["ephemeral"]}
 
 
 @app.post("/assessments/{assessment_id}/sessions")
@@ -880,7 +1029,7 @@ def start_session(session_id: str, request: Request = None) -> Dict[str, Any]:
     persist_session(session, {"status": "in_progress", "started_at": started_at})
     session["status"] = "in_progress"
     session["started_at"] = started_at
-    return {"status": session["status"], "next_item": public_item(ITEMS[session["item_order"][0]])}
+    return {"status": session["status"], "next_item": next_item(session_id, request)}
 
 
 def session_expired(session: Dict[str, Any]) -> bool:
@@ -901,6 +1050,8 @@ def next_item(session_id: str, request: Request = None) -> Dict[str, Any]:
     if not session:
         raise HTTPException(404, "Session not found")
     require_session_owner(session, request)
+    if session["status"] == "complete":
+        return {"complete": True}
     if session["status"] == "in_progress" and session_expired(session):
         persist_session(session, {"status": "timed_out"})
         session["status"] = "timed_out"
@@ -908,8 +1059,9 @@ def next_item(session_id: str, request: Request = None) -> Dict[str, Any]:
     for item_id in session["item_order"]:
         if item_id not in session["responses"]:
             safe = public_item(ITEMS[item_id])
-            if MEMORY_RECALL_STARTED.get(f"{session_id}:{item_id}"):
+            if MEMORY_RECALL_STARTED.get(f"{session_id}:{item_id}") or f"recall_started:{item_id}" in session.get("events", {}):
                 safe.pop("visual", None)
+                safe.pop("image_url", None)
                 safe["memory_recall_started"] = True
             return safe
     return {"complete": True}
@@ -932,6 +1084,8 @@ def begin_memory_recall(session_id: str, item_id: str, request: Request = None) 
     item = ITEMS.get(item_id)
     if not item or item_id not in session.get("item_order", []):
         raise HTTPException(404, "Memory item not found")
+    if item_id != next((key for key in session["item_order"] if key not in session["responses"]), None):
+        raise HTTPException(409, "Complete the current item first")
     response_type = item.get("memory_response_type")
     if item.get("type") != "memory" or response_type not in {"ordered_sequence", "cell_set"}:
         raise HTTPException(422, "This item does not use a memory recall protocol")
@@ -945,6 +1099,7 @@ def begin_memory_recall(session_id: str, item_id: str, request: Request = None) 
 
 
 @app.post("/sessions/{session_id}/responses")
+@serialized_flow
 def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"), request: Request = None) -> Dict[str, Any]:
     session = session_for(session_id)
     if not session:
@@ -964,8 +1119,14 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
     expected_order = session["item_order"].index(payload.item_id)
     if payload.presented_order != expected_order:
         raise HTTPException(422, "The item order does not match this assessment session")
+    if payload.item_id in session["responses"]:
+        return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
+    if payload.item_id != next((key for key in session["item_order"] if key not in session["responses"]), None):
+        raise HTTPException(409, "Complete the current item first")
     stored_answer = payload.answer
     if item.get("memory_response_type") in {"ordered_sequence", "cell_set"}:
+        if not MEMORY_RECALL_STARTED.get(f"{session_id}:{payload.item_id}") and f"recall_started:{payload.item_id}" not in session.get("events", {}):
+            raise HTTPException(409, "Begin recall before submitting a memory response")
         if payload.response_type and payload.response_type != item.get("memory_response_type"):
             raise HTTPException(422, "Memory response type does not match this item")
         try:
@@ -975,14 +1136,14 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
         if not isinstance(memory_response, list) or any(not isinstance(value, int) or isinstance(value, bool) for value in memory_response):
             raise HTTPException(422, "Memory response is unavailable")
         if item["memory_response_type"] == "ordered_sequence":
-            valid_memory_response = len(memory_response) == item.get("memory_input_length") and all(0 <= value <= 9 for value in memory_response)
+            valid_memory_response = len(memory_response) == item.get("memory_input_length") and all(-99999 <= value <= 99999 for value in memory_response)
         else:
             grid_size = item.get("memory_grid_size") or 0
             max_cell = grid_size * grid_size
             valid_memory_response = len(memory_response) == len(set(memory_response)) and all(0 <= value < max_cell for value in memory_response)
         if not valid_memory_response:
             raise HTTPException(422, "Memory response is outside the allowed format")
-        stored_answer = json.dumps(memory_response, separators=(",", ":"))
+        stored_answer = json.dumps(sorted(memory_response) if item["memory_response_type"] == "cell_set" else memory_response, separators=(",", ":"))
     elif payload.answer not in item["options"]:
         if payload.answer_index is None or payload.answer_index >= len(item["options"]):
             raise HTTPException(422, "Answer option is unavailable")
@@ -993,9 +1154,10 @@ def submit_response(session_id: str, payload: ResponseCreate, idempotency_key: O
         stored_answer = item["options"][payload.answer_index]
     if payload.item_id in session["responses"]:
         return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
-    response = {"item_id": payload.item_id, "answer": stored_answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
+    effective_idempotency_key = idempotency_key or f"response:{session_id}:{payload.item_id}"
+    response = {"item_id": payload.item_id, "answer": stored_answer, "response_time_ms": payload.response_time_ms, "presented_order": payload.presented_order, "idempotency_key": effective_idempotency_key, "data_origin": "PRACTICE" if session.get("ephemeral") else "REAL_PILOT"}
     if ASSESSMENT_PERSISTENCE and not session.get("ephemeral"):
-        accepted = PERSISTENCE.insert_response(session_id, payload.item_id, stored_answer or "", payload.response_time_ms, payload.presented_order, idempotency_key)
+        accepted = PERSISTENCE.insert_response(session_id, payload.item_id, stored_answer or "", payload.response_time_ms, payload.presented_order, effective_idempotency_key)
         if not accepted:
             return {"accepted": True, "duplicate": True, "item_id": payload.item_id}
     else:
@@ -1035,6 +1197,8 @@ def resume_session(session_id: str, request: Request = None) -> Dict[str, str]:
     if not session:
         raise HTTPException(404, "Session not found")
     require_session_owner(session, request)
+    if session.get("result_id") or session["status"] == "complete":
+        raise HTTPException(409, "Assessment is already complete")
     if session_expired(session):
         raise HTTPException(409, "Assessment time has ended")
     persist_session(session, {"status": "in_progress"})
@@ -1042,23 +1206,73 @@ def resume_session(session_id: str, request: Request = None) -> Dict[str, str]:
     return {"status": "in_progress"}
 
 
-def has_full_report_access(user_id: str) -> bool:
-    return access.has_entitlement(user_id, "assessment.complete.report") or access.has_entitlement(user_id, "report.download")
+def has_full_report_access(user_id: str, result_id: Optional[str] = None) -> bool:
+    """A payment grants one result, never every past or future report."""
+    if not result_id:
+        return False
+    if PERSISTENCE:
+        try:
+            if PERSISTENCE.has_result_entitlement(user_id, result_id):
+                return True
+        except Exception:
+            # Fail closed if the commerce migration is missing or unavailable.
+            return False
+    return any(
+        grant.get("owner_id") == user_id and grant.get("status") == "active"
+        and grant.get("code") in {"assessment.complete.report", "report.download"}
+        and access.ORDERS.get(grant.get("source_id"), {}).get("result_id") == result_id
+        and access.ORDERS.get(grant.get("source_id"), {}).get("status") == "fulfilled"
+        for grant in access.ENTITLEMENTS.values()
+    )
+
+
+def interest_attempt_for(user_id: str, result_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Read one result-scoped interest attempt from memory, then Postgres."""
+    key = f"{user_id}:{result_id}" if result_id else user_id
+    attempt = access.INTEREST_ATTEMPTS.get(key)
+    if attempt:
+        return attempt
+    if PERSISTENCE:
+        try:
+            attempt = PERSISTENCE.get_interest_attempt(user_id, result_id)
+        except Exception:
+            attempt = None
+        if attempt:
+            access.INTEREST_ATTEMPTS[key] = attempt
+            return attempt
+    return None
+
+
+def guest_identity_for(result_id: str) -> Optional[Dict[str, Any]]:
+    if not result_id:
+        return None
+    identity = RESULT_IDENTITIES.get(result_id)
+    if identity or not PERSISTENCE:
+        return identity
+    try:
+        identity = PERSISTENCE.get_guest_identity(result_id)
+    except Exception:
+        identity = None
+    if identity:
+        RESULT_IDENTITIES[result_id] = identity
+    return identity
 
 
 def result_projection(result: Dict[str, Any], request: Optional[Request] = None, force_full: bool = False) -> Dict[str, Any]:
     if force_full or not request:
         return {**result, "full_access": True}
     user = current_user(request)
-    identity = RESULT_IDENTITIES.get(result["id"])
+    identity = guest_identity_for(result["id"])
     if identity and datetime.now(timezone.utc) >= datetime.fromisoformat(identity["expires_at"]):
         RESULT_IDENTITIES.pop(result["id"], None)
         identity = None
     if user.get("is_guest") and (not identity or identity.get("user_id") != user.get("id")):
-        return {**result, "full_access": False, "identity_required": True, "domain_scores": {}, "domain_metrics": {}}
-    # The cognitive result is free after identity capture. Paid access starts
-    # at the direction, certificate, and private-delivery layer.
-    return {**result, "full_access": True, "paid_features_unlocked": has_full_report_access(user["id"]) or "platform_admin" in user.get("roles", [])}
+        return {"id": result["id"], "full_access": False, "identity_required": True, "domain_scores": {}, "domain_metrics": {}}
+    unlocked = has_full_report_access(user["id"], result["id"]) or "platform_admin" in user.get("roles", [])
+    if unlocked:
+        return {**result, "full_access": True, "paid_features_unlocked": True}
+    allowed = {"id", "session_id", "assessment_version", "score_version", "score_kind", "norm_version", "iq_score", "iq_score_kind", "iq_score_label", "iq_score_version", "iq_score_scale", "iq_score_method", "completed_at", "disclaimer", "official_iq_enabled"}
+    return {**{key: value for key, value in result.items() if key in allowed}, "full_access": False, "paid_features_unlocked": False, "domain_scores": {}, "domain_metrics": {}}
 
 
 def _result_record(result_id: str, request: Optional[Request] = None) -> Dict[str, Any]:
@@ -1067,7 +1281,10 @@ def _result_record(result_id: str, request: Optional[Request] = None) -> Dict[st
         if request:
             session = session_for(result["session_id"])
             user = current_user(request)
-            if session and session.get("user_id") != user["id"] and "platform_admin" not in user.get("roles", []):
+            identity = guest_identity_for(result_id)
+            if user.get("is_guest") and identity and datetime.now(timezone.utc) >= datetime.fromisoformat(identity["expires_at"]):
+                raise HTTPException(410, "This guest result has expired. Start a new assessment.")
+            if result.get("user_id") != user["id"] and "platform_admin" not in user.get("roles", []):
                 raise HTTPException(404, "Result not found")
         return result
     if ASSESSMENT_PERSISTENCE:
@@ -1075,13 +1292,14 @@ def _result_record(result_id: str, request: Optional[Request] = None) -> Dict[st
         if result:
             if request:
                 user = current_user(request)
-                if "platform_admin" not in user.get("roles", []) and result.get("user_id") not in {None, user["id"]}:
+                if "platform_admin" not in user.get("roles", []) and result.get("user_id") != user["id"]:
                     raise HTTPException(404, "Result not found")
             return result
     raise HTTPException(404, "Result not found")
 
 
 @app.post("/sessions/{session_id}/submit")
+@serialized_flow
 def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
     session = session_for(session_id)
     if not session:
@@ -1099,10 +1317,11 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
                 return result_projection(existing, request)
         if session["result_id"] in RESULTS:
             return result_projection(RESULTS[session["result_id"]], request)
-    item_domains = {key: value["domain"] for key, value in ITEMS.items()}
-    item_keys = {key: value["answer"] for key, value in ITEMS.items()}
+    item_domains = {key: ITEMS[key]["domain"] for key in session["item_order"]}
+    item_keys = {key: json.dumps(sorted(json.loads(ITEMS[key]["answer"])), separators=(",", ":")) if ITEMS[key].get("memory_response_type") == "cell_set" else ITEMS[key]["answer"] for key in session["item_order"]}
     score = score_domains(session["responses"].values(), item_domains, item_keys)
-    quality = classify_session_quality([int(value["response_time_ms"]) for value in session["responses"].values()], sum(1 for event in EVENTS if event["session_id"] == session_id and event["event_type"] == "interruption"))
+    interruption_count = PERSISTENCE.count_events(session_id, "interruption") if ASSESSMENT_PERSISTENCE else sum(1 for event in EVENTS if event["session_id"] == session_id and event["event_type"] == "interruption")
+    quality = classify_session_quality([int(value["response_time_ms"]) for value in session["responses"].values()], interruption_count)
     result_id = str(uuid4())
     domain_metrics = {}
     for domain, metric in score.domain_metrics.items():
@@ -1144,18 +1363,29 @@ def questionnaire_responses(questionnaire_id: str, payload: InterestResponseCrea
     if questionnaire_id != "compass-v1":
         raise HTTPException(404, "Questionnaire not found")
     user = current_user(request)
-    if not has_full_report_access(user["id"]):
+    if not has_full_report_access(user["id"], payload.result_id):
         raise HTTPException(402, "Unlock the full report before completing the interest check-in")
-    if set(payload.responses) - {item["id"] for item in INTEREST_ITEMS}:
-        raise HTTPException(422, "Unknown interest dimension")
+    _result_record(payload.result_id, request)
+    if set(payload.responses) != {item["id"] for item in INTEREST_ITEMS}:
+        raise HTTPException(422, "Complete all six interest dimensions")
     if any(value < 0 or value > 100 for value in payload.responses.values()):
         raise HTTPException(422, "Interest ratings must be between 0 and 100")
-    return access.store_interest_attempt(user["id"], payload.responses)
+    attempt = access.store_interest_attempt(user["id"], payload.responses, payload.result_id)
+    if PERSISTENCE:
+        try:
+            PERSISTENCE.store_interest_attempt(attempt)
+        except Exception as error:
+            raise HTTPException(503, "Interest response could not be saved") from error
+    return attempt
 
 
 @app.get("/me/interests")
-def my_interests(request: Request) -> Dict[str, Any]:
-    return access.INTEREST_ATTEMPTS.get(current_user(request)["id"], {"status": "not_started", "scores": {}, "code": None})
+def my_interests(request: Request, result_id: Optional[str] = None) -> Dict[str, Any]:
+    user = current_user(request)
+    if not has_full_report_access(user["id"], result_id):
+        raise HTTPException(402, "Open an unlocked report before completing the interest check-in")
+    _result_record(result_id, request)
+    return interest_attempt_for(user["id"], result_id) or {"status": "not_started", "scores": {}, "code": None}
 
 
 @app.post("/consents")
@@ -1176,6 +1406,8 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         raise HTTPException(403, "Only the 18–22 scored pilot flow can release a saved result")
     user = current_user(request)
     was_guest = bool(user.get("is_guest"))
+    if payload.result_id:
+        _result_record(payload.result_id, request)
     if was_guest:
         access.promote_guest_to_student(user, payload.email, payload.display_name, payload.age_band)
     else:
@@ -1188,15 +1420,76 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         result = _result_record(payload.result_id, request=None)
         if result.get("user_id") != user["id"]:
             raise HTTPException(404, "Result not found")
-        RESULT_IDENTITIES[payload.result_id] = {"user_id": user["id"], "email": user["email"], "captured_at": NOW(), "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()}
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        identity = {"user_id": user["id"], "email": user["email"], "display_name": user["display_name"], "age_band": user["age_band"], "consent_version": payload.consent_version, "captured_at": NOW(), "expires_at": expires_at}
+        RESULT_IDENTITIES[payload.result_id] = identity
+        if PERSISTENCE and was_guest:
+            token = _header_token(request)
+            if token:
+                PERSISTENCE.store_guest_identity(payload.result_id, user["id"], token, user["email"], user["display_name"], user["age_band"], payload.consent_version, expires_at)
     access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age_band": payload.age_band, "consent_version": payload.consent_version})
     guardian = None
     if payload.age_band == "15-17":
         if not payload.guardian_email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email):
             raise HTTPException(422, "A guardian email is required for ages 15–17")
         guardian = create_guardian_consent(GuardianConsentCreate(guardian_email=payload.guardian_email, consent_version=payload.consent_version), request)
-    promoted_token = access.issue_dev_session(user["id"]) if was_guest else None
+    # Supplying an email is not authentication. Keep the opaque guest token
+    # until verified sign-in explicitly claims this result.
+    promoted_token = None
     return {"user": access.public_user(user), "consent_version": payload.consent_version, "guardian_consent": guardian, "session_token": promoted_token, "provider": "development" if promoted_token else None, "result_id": payload.result_id}
+
+
+class GuestResultClaim(BaseModel):
+    result_id: str
+    guest_token: str = Field(min_length=20, max_length=300)
+
+
+@app.post("/results/claim")
+@serialized_flow
+def claim_guest_result(payload: GuestResultClaim, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
+    if user.get("is_guest"):
+        raise HTTPException(401, "Verify your email before saving a guest result")
+    guest = access.user_for_token(payload.guest_token)
+    if not guest and PERSISTENCE:
+        guest = PERSISTENCE.get_guest_user(payload.guest_token)
+    result = RESULTS.get(payload.result_id)
+    if not result and PERSISTENCE:
+        result = PERSISTENCE.get_result(payload.result_id)
+    identity = guest_identity_for(payload.result_id)
+    if not guest or not identity or not result or identity["user_id"] != guest["id"]:
+        raise HTTPException(404, "Guest result not found")
+    if datetime.now(timezone.utc) >= datetime.fromisoformat(identity["expires_at"]):
+        raise HTTPException(410, "Guest result has expired")
+    if identity["email"].lower() != user.get("email", "").lower():
+        raise HTTPException(403, "Sign in using the email entered for this result")
+    if result["user_id"] == user["id"]:
+        return {"claimed": True, "result_id": result["id"]}
+    if result["user_id"] != guest["id"]:
+        raise HTTPException(404, "Guest result not found")
+    if ASSESSMENT_PERSISTENCE:
+        if not PERSISTENCE.claim_guest_result(payload.result_id, guest["id"], user["id"], user.get("email", ""), user.get("display_name", "IAQ student"), user.get("age_band", "unknown")):
+            raise HTTPException(409, "This guest result was already claimed or is no longer available")
+        if result:
+            result["user_id"] = user["id"]
+        RESULT_IDENTITIES.pop(payload.result_id, None)
+        access.record_audit(user["id"], "result.claimed", "result", payload.result_id, {})
+        return {"claimed": True, "result_id": payload.result_id}
+    result["user_id"] = user["id"]
+    SESSIONS[result["session_id"]]["user_id"] = user["id"]
+    for order in access.ORDERS.values():
+        if order.get("result_id") == result["id"] and order["purchaser_user_id"] == guest["id"]:
+            order["purchaser_user_id"] = user["id"]
+            order["beneficiary_user_id"] = user["id"]
+            for grant in access.ENTITLEMENTS.values():
+                if grant.get("source_id") == order["id"]:
+                    grant["owner_id"] = user["id"]
+    interest = access.INTEREST_ATTEMPTS.pop(f"{guest['id']}:{result['id']}", None)
+    if interest:
+        interest["user_id"] = user["id"]
+        access.INTEREST_ATTEMPTS[f"{user['id']}:{result['id']}"] = interest
+    access.record_audit(user["id"], "result.claimed", "result", result["id"], {})
+    return {"claimed": True, "result_id": result["id"]}
 
 
 @app.post("/guardian-consents")
@@ -1240,7 +1533,8 @@ def recommendations(request: Request) -> Dict[str, Any]:
     user_results = [result for result in RESULTS.values() if session_for(result["session_id"]) and session_for(result["session_id"]).get("user_id") == user["id"]]
     latest = max(user_results, key=lambda result: result.get("completed_at", ""), default=None)
     cognitive = ({domain: value if isinstance(value, int) else 50 for domain, value in latest["domain_scores"].items()} if latest else {domain: 50 for domain in DOMAINS})
-    interests = access.INTEREST_ATTEMPTS.get(user["id"], {}).get("scores", {"I": 50, "A": 50, "C": 50, "R": 50, "S": 50, "E": 50})
+    interest = interest_attempt_for(user["id"], latest["id"] if latest else None)
+    interests = (interest or {}).get("scores", {"I": 50, "A": 50, "C": 50, "R": 50, "S": 50, "E": 50})
     return {"version": "MATCH-V2", "recommendations": [{**{key: value for key, value in major.items() if key != "vector"}, **major_fit(cognitive, interests, latest["answered_count"] if latest else 0, major["vector"]), "confidence": recommendation_confidence(latest["answered_count"] if latest else 0, .34, 5, 24)} for major in MAJORS], "explanations": {"method": "weighted transparent fit using the latest persisted cognitive result and optional stated interests; not destiny", "warnings": ["experimental_profile", "no_population_norms", "try_real_experiences_before_deciding"]}}
 
 
@@ -1290,7 +1584,7 @@ def ai_result_interpretation(result_id: str, request: Request) -> Dict[str, Any]
     receives aggregate result evidence and cannot write back score fields.
     """
     user_id = current_user(request)["id"]
-    if not has_full_report_access(user_id):
+    if not has_full_report_access(user_id, result_id):
         raise HTTPException(402, "Unlock the full report before requesting an AI evaluation")
     result = _result_record(result_id, request)
     labels = {domain: domain.replace("_", " ").title() for domain in DOMAINS}
@@ -1300,11 +1594,11 @@ def ai_result_interpretation(result_id: str, request: Request) -> Dict[str, Any]
         return cached
     try:
         narrative, metadata = ai.interpret_result(result, labels)
-    except ai.AIUnavailable as error:
-        raise HTTPException(503, str(error)) from error
-    except ai.AIOutputError as error:
-        raise HTTPException(502, str(error)) from error
-    response = {"id": str(uuid4()), "result_id": result_id, "kind": "result_interpretation", "status": "generated", "data_origin": "AI_ASSISTED", "created_at": NOW(), "input_hash": input_hash, **metadata, "narrative": narrative}
+    except (ai.AIUnavailable, ai.AIOutputError):
+        ranked = sorted(((name, value) for name, value in result["domain_scores"].items() if value is not None), key=lambda pair: pair[1], reverse=True)
+        narrative = {"what_stands_out": [f"{labels[name]} was among your strongest observed areas on this form." for name, value in ranked[:2]], "where_more_evidence": ["Different questions and another occasion may produce a different profile. These items have not been calibrated against population norms."], "timing_context": "Response times describe this session only and do not change your score.", "next_step": "Complete the interest check-in, then try a small project in a suggested area."}
+        metadata = {"provider": "deterministic_fallback", "model": "PROFILE-1", "prompt_version": "PROFILE-1", "fallback_used": True}
+    response = {"id": str(uuid4()), "result_id": result_id, "kind": "result_interpretation", "status": "generated", "data_origin": "DETERMINISTIC_FALLBACK" if metadata.get("fallback_used") else "AI_ASSISTED", "created_at": NOW(), "input_hash": input_hash, **metadata, "narrative": narrative}
     return _store_ai_output(response, user_id)
 
 
@@ -1312,12 +1606,12 @@ def ai_result_interpretation(result_id: str, request: Request) -> Dict[str, Any]
 def ai_directions(payload: AIDirectionsCreate, request: Request) -> Dict[str, Any]:
     """Generate a paid, cached direction evaluation from aggregate evidence."""
     user = current_user(request)
-    if not has_full_report_access(user["id"]):
+    if not has_full_report_access(user["id"], payload.result_id):
         raise HTTPException(402, "Unlock the full report before exploring directions")
     result = _result_record(payload.result_id, request) if payload.result_id else _latest_result_for_user(user["id"])
     if not result:
         raise HTTPException(404, "Complete an assessment before requesting direction context")
-    interest = access.INTEREST_ATTEMPTS.get(user["id"], {"status": "not_started", "scores": {}, "code": None})
+    interest = interest_attempt_for(user["id"], result["id"]) or {"status": "not_started", "scores": {}, "code": None}
     if interest.get("status") in {"not_started", None}:
         raise HTTPException(409, "Complete the interest check-in before exploring directions")
     candidates = [{key: value for key, value in major.items() if key != "vector"} | major_fit({domain: value if isinstance(value, int) else 50 for domain, value in result.get("domain_scores", {}).items()}, interest.get("scores", {}), result.get("answered_count", 0), major["vector"]) for major in MAJORS]
@@ -1347,7 +1641,7 @@ def request_report_delivery(result_id: str, payload: ReportDeliveryCreate, reque
     user = current_user(request)
     if os.getenv("IAQ_ENV", "development").lower() == "production" and not email_delivery.configured():
         raise HTTPException(503, "Production report delivery is not configured")
-    if not has_full_report_access(user["id"]):
+    if not has_full_report_access(user["id"], result_id):
         raise HTTPException(402, "Unlock the full report before requesting report delivery")
     result = _result_record(result_id, request)
     if not payload.granted:
@@ -1377,24 +1671,53 @@ def request_report_delivery(result_id: str, payload: ReportDeliveryCreate, reque
 @app.post("/certificates")
 def create_certificate(payload: CertificateCreate, request: Request) -> Dict[str, Any]:
     user = current_user(request)
-    if not has_full_report_access(user["id"]):
+    if not has_full_report_access(user["id"], payload.result_id):
         raise HTTPException(402, "Unlock the full report before requesting a completion certificate")
     result = _result_record(payload.result_id, request)
     if result.get("answered_count", 0) < 1:
         raise HTTPException(409, "A certificate needs a submitted assessment")
-    return access.issue_certificate(user["id"], result)
+    if PERSISTENCE:
+        try:
+            existing = PERSISTENCE.get_certificate_for_result(user["id"], payload.result_id)
+        except Exception:
+            existing = None
+        if existing:
+            access.CERTIFICATES[existing["id"]] = existing
+            return existing
+    certificate = access.issue_certificate(user["id"], result)
+    if PERSISTENCE:
+        try:
+            PERSISTENCE.store_certificate(certificate)
+        except Exception as error:
+            raise HTTPException(503, "Certificate could not be saved") from error
+    return certificate
 
 
 @app.get("/certificates")
 def list_certificates(request: Request) -> Dict[str, Any]:
-    user_id = current_user(request)["id"]
-    return {"certificates": [item for item in access.CERTIFICATES.values() if item["user_id"] == user_id]}
+    user = current_user(request)
+    certificates = [item for item in access.CERTIFICATES.values() if item["user_id"] == user["id"]]
+    if PERSISTENCE:
+        try:
+            persisted = PERSISTENCE.list_certificates(user["id"])
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in certificates}
+        certificates.extend(item for item in persisted if item["id"] not in known)
+    return {"certificates": certificates}
 
 
 @app.get("/certificates/{certificate_id}")
 def get_certificate(certificate_id: str, request: Request) -> Dict[str, Any]:
+    user = current_user(request)
     certificate = access.CERTIFICATES.get(certificate_id)
-    if not certificate or (certificate["user_id"] != current_user(request)["id"] and "platform_admin" not in current_user(request)["roles"]):
+    if not certificate and PERSISTENCE:
+        try:
+            certificate = PERSISTENCE.get_certificate(certificate_id)
+        except Exception:
+            certificate = None
+    owned = certificate and (certificate["user_id"] == user["id"] or (PERSISTENCE and certificate["user_id"] == PERSISTENCE._db_user_id(user["id"])))
+    if not certificate or (not owned and "platform_admin" not in user["roles"]):
         raise HTTPException(404, "Certificate not found")
     return certificate
 
@@ -1402,6 +1725,11 @@ def get_certificate(certificate_id: str, request: Request) -> Dict[str, Any]:
 @app.get("/certificates/verify/{identifier}")
 def verify_certificate(identifier: str) -> Dict[str, Any]:
     certificate = access.certificate_for_identifier(identifier)
+    if not certificate and PERSISTENCE:
+        try:
+            certificate = PERSISTENCE.certificate_for_identifier(identifier)
+        except Exception:
+            certificate = None
     if not certificate:
         return {"valid": False, "status": "not_found", "certificate_identifier": identifier}
     return {"valid": certificate["status"] == "issued", "status": certificate["status"], "certificate_identifier": certificate["certificate_identifier"], "title": certificate["title"], "assessment_version": certificate["assessment_version"], "issued_at": certificate["issued_at"]}
@@ -1602,6 +1930,20 @@ def external_dataset_asset(dataset: str, asset_path: str, request: Request) -> F
     if not asset:
         raise HTTPException(404, "Dataset asset not found")
     return FileResponse(asset)
+
+
+@app.get("/assessment-stimuli/{item_id}.svg")
+def staged_matrix_stimulus(item_id: str) -> Response:
+    if ASSESSMENT_SOURCE != "staged":
+        raise HTTPException(404, "Assessment stimulus not found")
+    visual = ITEMS.get(item_id, {}).get("matrix_visual")
+    if not visual:
+        raise HTTPException(404, "Assessment stimulus not found")
+    try:
+        svg = render_matrix_svg(visual.get("stimulus"), visual.get("options"))
+    except ValueError:
+        raise HTTPException(422, "Assessment stimulus is incomplete")
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/assessment-assets/{asset_path:path}")

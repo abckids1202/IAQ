@@ -18,13 +18,13 @@ DOMAINS = (
 )
 
 # This is deliberately a separate score track from the observed domain signals.
-# It uses the familiar 100/15 display convention as a user-facing reference,
+# It maps observed performance into an arbitrary 70–130 display range,
 # but it is not derived from population norms, IRT parameters, or a validated
 # conversion table. Keep the label and method explicit anywhere it is shown.
-EXPERIMENTAL_IQ_SCORE_VERSION = "IAQ-IQ-EXPERIMENTAL-1"
+EXPERIMENTAL_IQ_SCORE_VERSION = "IAQ-IQ-EXPERIMENTAL-2"
 EXPERIMENTAL_IQ_SCORE_KIND = "experimental_iq_style_estimate"
 EXPERIMENTAL_IQ_SCORE_LABEL = "IAQ IQ score — experimental"
-EXPERIMENTAL_IQ_SCORE_SCALE = "100_mean_15_sd_reference_only"
+EXPERIMENTAL_IQ_SCORE_SCALE = "70_130_uncalibrated_reference"
 EXPERIMENTAL_IQ_SCORE_METHOD = "70 + (six_domain_mean * 0.60)"
 
 
@@ -57,20 +57,26 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     response_times: Dict[str, List[int]] = {domain: [] for domain in DOMAINS}
     rapid = 0
     interruptions = 0
+    seen = set()
     for response in responses:
         item_id = str(response.get("item_id", ""))
         domain = item_domains.get(item_id)
-        if domain not in totals:
+        if domain not in totals or item_id in seen or item_id not in item_keys:
             continue
+        seen.add(item_id)
+        if totals[domain][1] >= 8:
+            raise ValueError("A scored form cannot contain more than eight responses per domain")
         # Every complete form reserves eight items per domain.  Responses are
         # counted here for evidence/quality, while the fixed denominator below
         # ensures omissions cannot inflate accuracy.
         totals[domain][1] += 1
         if str(response.get("answer")) == item_keys.get(item_id):
             totals[domain][0] += 1
-        if int(response.get("response_time_ms", 10000) or 10000) < 1500:
-            rapid += 1
-        response_times[domain].append(int(response.get("response_time_ms", 10000) or 10000))
+        elapsed = response.get("response_time_ms")
+        if isinstance(elapsed, (int, float)) and elapsed >= 0:
+            if elapsed < 1500:
+                rapid += 1
+            response_times[domain].append(int(elapsed))
     # A domain with too little evidence is explicitly unassessed. It must not
     # become a flattering or punitive ability-looking number by accident.
     minimum_items_for_interpretation = 4
@@ -88,15 +94,18 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
     # evidence. With no human calibration or age norms, this is only a
     # transparent reference transform of the complete profile mean.
     complete_profile = len(interpretable_scores) == len(DOMAINS)
-    iq_score = round(70 + (composite * 0.60)) if complete_profile and composite is not None else None
+    # Round once at the end; rounding each domain first biases the composite.
+    exact_composite = sum(correct / 8 * 100 for correct, _ in totals.values()) / len(DOMAINS)
+    iq_score = round(70 + (exact_composite * 0.60)) if complete_profile else None
     warnings: List[str] = []
-    if answered < 7:
+    if answered < 48:
         warnings.append("incomplete_assessment")
     if rapid >= 2:
         warnings.append("rapid_guessing_possible")
     if interruptions:
         warnings.append("session_interrupted")
-    confidence = "high" if answered >= 12 and not warnings else "moderate" if answered >= 7 else "low"
+    # Completion is not reliability. No empirical precision estimate exists.
+    confidence = "limited" if complete_profile and not warnings else "low"
     domain_metrics = {}
     for domain, (correct, total) in totals.items():
         times = sorted(response_times[domain])
@@ -105,6 +114,7 @@ def score_domains(responses: Iterable[Mapping[str, object]], item_domains: Mappi
         domain_metrics[domain] = {
             "answered": total,
             "correct": correct,
+            "omitted": 8 - total,
             "accuracy": round((correct / 8) * 100) if total else None,
             "median_response_time_ms": median,
             "interpretation_eligible": total >= minimum_items_for_interpretation,
@@ -158,4 +168,4 @@ def classify_session_quality(response_times_ms: Iterable[int], interruptions: in
         warnings.append("possible_fatigue")
     if accessibility_adjustments:
         warnings.append("accessibility_adjustment_recorded")
-    return {"status": "low" if len(warnings) >= 2 else "moderate" if warnings else "acceptable", "rapid_guessing_items": rapid_count, "fatigue_probability": 0.55 if fatigue else 0.12, "warnings": warnings}
+    return {"status": "low" if len(warnings) >= 2 else "moderate" if warnings else "acceptable", "rapid_guessing_items": rapid_count, "possible_fatigue": fatigue, "warnings": warnings}

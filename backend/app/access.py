@@ -203,10 +203,10 @@ def promote_guest_to_student(user: Dict[str, Any], email: str, display_name: str
         "email": email.strip().lower(),
         "display_name": display_name.strip(),
         "age_band": age_band,
-        "roles": ["student"],
-        "account_status": "onboarding_incomplete",
-        "is_guest": False,
-        "mfa_verified": True,
+        "roles": ["guest"],
+        "account_status": "guest_identity_captured",
+        "is_guest": True,
+        "mfa_verified": False,
     })
     add_entitlement(user["id"], "assessment.free.start", "account_creation", f"free:{user['id']}", quantity=1, granted_by="system")
     return user
@@ -232,7 +232,7 @@ def user_for_identifier(identifier: Optional[str]) -> Dict[str, Any]:
 
 def get_or_create_student(email: str) -> Dict[str, Any]:
     for user in USERS.values():
-        if user["email"].lower() == email.lower():
+        if not user.get("is_guest") and user["email"].lower() == email.lower():
             return user
     user_id = f"student-{uuid4().hex[:12]}"
     user = {"id": user_id, "email": email.lower(), "display_name": email.split("@")[0].replace(".", " ").title(), "roles": ["student"], "account_status": "onboarding_incomplete", "age_band": "unknown", "school_id": None, "mfa_verified": True}
@@ -296,7 +296,7 @@ def seed_demo_entitlements() -> None:
     add_entitlement("demo-student", "report.download", "development_seed", "demo-report-download", quantity=99, granted_by="system")
 
 
-def store_interest_attempt(user_id: str, responses: Dict[str, int]) -> Dict[str, Any]:
+def store_interest_attempt(user_id: str, responses: Dict[str, int], result_id: Optional[str] = None) -> Dict[str, Any]:
     """Store an exploratory interest check-in separately from cognitive scoring."""
     dimensions = ("R", "I", "A", "S", "E", "C")
     scores = {dimension: max(0, min(100, int(responses.get(dimension, 0)))) for dimension in dimensions}
@@ -306,7 +306,11 @@ def store_interest_attempt(user_id: str, responses: Dict[str, int]) -> Dict[str,
         "instrument_version": "RIASEC-EXPLORATORY-0.1", "scores": scores, "code": code,
         "answered_count": len(responses), "data_origin": "REAL_PILOT", "status": "provisional", "created_at": now(),
     }
-    INTEREST_ATTEMPTS[user_id] = attempt
+    attempt["result_id"] = result_id
+    # Preserve the submitted ratings for the durable adapter. These are
+    # exploratory interest responses, not cognitive answer keys.
+    attempt["responses"] = dict(responses)
+    INTEREST_ATTEMPTS[f"{user_id}:{result_id}" if result_id else user_id] = attempt
     record_audit(user_id, "interest_attempt.created", "interest_attempt", attempt["id"], {"instrument_version": attempt["instrument_version"]})
     return attempt
 
@@ -331,7 +335,7 @@ def certificate_for_identifier(identifier: str) -> Optional[Dict[str, Any]]:
     return next((item for item in CERTIFICATES.values() if item["certificate_identifier"].upper() == identifier.strip().upper()), None)
 
 
-def create_order(purchaser_id: str, product_id: str, beneficiary_id: Optional[str] = None, school_id: Optional[str] = None) -> Dict[str, Any]:
+def create_order(purchaser_id: str, product_id: str, beneficiary_id: Optional[str] = None, school_id: Optional[str] = None, result_id: Optional[str] = None) -> Dict[str, Any]:
     product = PRODUCTS.get(product_id)
     if not product or not product["active"]:
         raise ValueError("Product is unavailable")
@@ -351,6 +355,7 @@ def create_order(purchaser_id: str, product_id: str, beneficiary_id: Optional[st
         "id": order_id, "order_number": f"IAQ-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{order_id[:8].upper()}",
         "purchaser_user_id": purchaser_id, "beneficiary_user_id": beneficiary_id, "school_id": school_id,
         "product_id": product_id, "product_snapshot": {key: value for key, value in product.items() if key not in {"entitlement_code", "report_code"}},
+        "result_id": result_id,
         "price_id": product["price_id"], "price_snapshot": {"amount_minor": product["amount_minor"], "currency": product["currency"]},
         "currency": product["currency"], "subtotal_minor": product["amount_minor"], "discount_minor": 0, "tax_minor": 0,
         "total_minor": product["amount_minor"], "status": "awaiting_payment" if product["amount_minor"] else "paid",

@@ -31,6 +31,7 @@ def test_new_user_can_register_test_unlock_and_continue():
         assert "answer_index" not in item
         response_payload = {"item_id": item["id"], "presented_order": presented_order, "response_time_ms": 900}
         if item.get("type") == "memory":
+            assert client.post(f"/sessions/{session_id}/items/{item['id']}/begin-recall", headers=headers).status_code == 200
             memory_type = item.get("memory_response_type") or "ordered_sequence"
             memory_length = item.get("memory_input_length") or 4
             response_payload["response_type"] = memory_type
@@ -48,9 +49,11 @@ def test_new_user_can_register_test_unlock_and_continue():
     assert submitted.status_code == 200
     result = submitted.json()
     result_id = result["id"]
-    assert result["full_access"] is True
+    assert result["full_access"] is False
+    assert result["domain_scores"] == {}
+    assert "answered_count" not in result
 
-    order_response = client.post("/orders", json={"product_id": "iaq-complete"}, headers=headers)
+    order_response = client.post("/orders", json={"product_id": "iaq-complete", "result_id": result_id}, headers=headers)
     assert order_response.status_code == 200
     order_id = order_response.json()["id"]
     checkout = client.post(f"/orders/{order_id}/checkout", headers=headers)

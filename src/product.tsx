@@ -1,23 +1,45 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getInterestQuestionnaire, getInterestResult, issueCertificate, listCertificates, submitInterestResponses, verifyCertificate, type Certificate, type InterestItem, type InterestResult } from './api'
+import { getInterestQuestionnaire, getInterestResult, issueCertificate, listCertificates, submitInterestResponses, verifyCertificate, requestAIDirections, type AIDirectionContext, type Certificate, type InterestItem, type InterestResult } from './api'
 
 function ProductIntro({ eyebrow, title, body }: { eyebrow: string; title: React.ReactNode; body: string }) {
   return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p className="lede">{body}</p></div></div>
 }
 
-export function InterestAssessment({ resultId }: { resultId?: string }) {
+export function InterestAssessment({ resultId: fallbackId }: { resultId?: string }) {
+  const [params] = useSearchParams()
+  const resultId = params.get('result') || fallbackId
   const [items, setItems] = useState<InterestItem[]>([])
   const [ratings, setRatings] = useState<Record<string, number>>({})
   const [result, setResult] = useState<InterestResult | null>(null)
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
-  useEffect(() => { void Promise.all([getInterestQuestionnaire(), getInterestResult()]).then(([questionnaire, existing]) => { setItems(questionnaire.items); setRatings(existing.scores || Object.fromEntries(questionnaire.items.map((item) => [item.id, 50]))); if (existing.status !== 'not_started') setResult(existing) }).catch(() => setStatus('We could not load the interest check-in yet.')) }, [])
+  useEffect(() => { setResult(null); setItems([]); void Promise.all([getInterestQuestionnaire(), getInterestResult(resultId)]).then(([questionnaire, existing]) => { setItems(questionnaire.items); setRatings({ ...Object.fromEntries(questionnaire.items.map((item) => [item.id, 50])), ...existing.scores }); if (existing.status !== 'not_started') setResult(existing) }).catch((error) => setStatus(error instanceof Error ? error.message : 'Open your unlocked report to begin.')) }, [resultId])
   const submit = async (event: React.FormEvent) => { event.preventDefault(); setSaving(true); setStatus(''); try { setResult(await submitInterestResponses(ratings, resultId)); setStatus('Saved. These interests are context, not a verdict.'); } catch (error) { setStatus(error instanceof Error ? error.message : 'We could not save your interests.') } finally { setSaving(false) } }
-  return <div className="page product-page"><ProductIntro eyebrow="Explore directions / Your interests" title={<>Tell us what you enjoy.<br /><em>Then see what to try.</em></>} body="This short check-in adds context after your cognitive profile. There are no right answers, and it does not change your assessment score." /><section className="panel interest-checkin"><div className="panel-top"><div><div className="eyebrow">RIASEC exploratory check-in</div><h2>Rate each statement</h2></div><span className="mono-label">0 = not me · 100 = very me</span></div><form onSubmit={submit}><div className="interest-slider-list">{items.map((item) => <label className="interest-slider" key={item.id}><span><b>{item.dimension}</b>{item.label}</span><output>{ratings[item.id] ?? 50}</output><input type="range" min="0" max="100" value={ratings[item.id] ?? 50} onChange={(event) => setRatings((current) => ({ ...current, [item.id]: Number(event.target.value) }))} aria-label={`${item.dimension}: ${item.label}`} /></label>)}</div><div className="product-form-footer"><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save my answers'} <span>→</span></button>{status && <span role="status" className="form-status">{status}</span>}</div></form></section>{result && <section className="panel interest-result"><div className="eyebrow">Your current interest pattern</div><div className="interest-code"><strong>{result.code || '—'}</strong><span>top three areas</span></div><div className="interest-result-bars">{Object.entries(result.scores || {}).sort(([, a], [, b]) => b - a).map(([code, score]) => <div key={code}><span>{code}</span><i><b style={{ width: `${score}%` }} /></i><strong>{score}</strong></div>)}</div><p>Use this as a prompt for real experiments. <Link to="/compass">Explore directions ↗</Link></p></section>}</div>
+  return <div className="page product-page"><ProductIntro eyebrow="Explore directions / Your interests" title={<>Tell us what you enjoy.<br /><em>Then see what to try.</em></>} body="This short check-in adds context after your cognitive profile. There are no right answers, and it does not change your assessment score." /><section className="panel interest-checkin"><div className="panel-top"><div><div className="eyebrow">RIASEC exploratory check-in</div><h2>Rate each statement</h2></div><span className="mono-label">0 = not me · 100 = very me</span></div><form onSubmit={submit}><div className="interest-slider-list">{items.map((item) => <label className="interest-slider" key={item.id}><span><b>{item.dimension}</b>{item.label}</span><output>{ratings[item.id] ?? 50}</output><input type="range" min="0" max="100" value={ratings[item.id] ?? 50} onChange={(event) => setRatings((current) => ({ ...current, [item.id]: Number(event.target.value) }))} aria-label={`${item.dimension}: ${item.label}`} /></label>)}</div><div className="product-form-footer"><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save my answers'} <span>→</span></button>{status && <span role="status" className="form-status">{status}</span>}</div></form></section>{result && <section className="panel interest-result"><div className="eyebrow">Your current interest pattern</div><div className="interest-code"><strong>{result.code || '—'}</strong><span>top three areas</span></div><div className="interest-result-bars">{Object.entries(result.scores || {}).sort(([, a], [, b]) => b - a).map(([code, score]) => <div key={code}><span>{code}</span><i><b style={{ width: `${score}%` }} /></i><strong>{score}</strong></div>)}</div><p>Use this as a prompt for real experiments. <Link to={`/compass?result=${encodeURIComponent(resultId || '')}`}>Explore directions ↗</Link></p></section>}</div>
 }
 
-export function Certificates({ resultId }: { resultId?: string }) {
+export function PaidDirections({ resultId: fallbackId }: { resultId?: string }) {
+  const [params] = useSearchParams()
+  const resultId = params.get('result') || fallbackId
+  const [directions, setDirections] = useState<AIDirectionContext[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [origin, setOrigin] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    setDirections([]); setError('')
+    if (!resultId) { setError('Open a completed report to explore directions.'); return }
+    setBusy(true)
+    requestAIDirections(resultId).then((response) => { if (!cancelled) { setDirections(response.directions); setOrigin(response.data_origin) } }).catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Directions could not load.') }).finally(() => { if (!cancelled) setBusy(false) })
+    return () => { cancelled = true }
+  }, [resultId])
+  return <div className="page product-page"><ProductIntro eyebrow="Your report / Possible directions" title={<>Ideas to explore next.</>} body="Based on this test and your stated interests. These are exploratory suggestions, not career predictions or validated fit probabilities." />{busy && <p role="status">Preparing your directions…</p>}{error && <section className="panel"><p role="alert">{error}</p><Link to={`/interests?result=${encodeURIComponent(resultId || '')}`}>Complete your interest check-in →</Link></section>}{directions.map((direction) => <section className="panel" key={direction.slug}><h2>{direction.name}</h2><h3>Why this may fit</h3><p>{direction.why_this_may_fit}</p><h3>What to try next</h3><p>{direction.try_next}</p><small>{direction.caution}</small></section>)}{origin && <p className="mono-label">{origin === 'DETERMINISTIC_FALLBACK' ? 'Rule-based suggestions · AI not required' : 'AI-assisted explanation'}</p>}<Link to={`/results?result=${encodeURIComponent(resultId || '')}`}>Back to your report →</Link></div>
+}
+
+export function Certificates({ resultId: fallbackId }: { resultId?: string }) {
+  const [params] = useSearchParams()
+  const resultId = params.get('result') || fallbackId
   const [certificates, setCertificates] = useState<Certificate[]>([])
   const [status, setStatus] = useState('')
   useEffect(() => { void listCertificates().then(setCertificates).catch(() => undefined) }, [])

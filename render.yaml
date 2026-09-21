@@ -13,10 +13,8 @@ services:
         value: production
       - key: IAQ_AUTH_MODE
         value: supabase
-      # Keep anonymous assessment off until guest results can be durably linked
-      # to a Supabase account.
       - key: IAQ_GUEST_ASSESSMENT_ENABLED
-        value: "false"
+        value: "true"
       - key: IAQ_REQUIRE_PERSISTENCE
         value: "true"
       - key: IAQ_REQUIRE_REVIEWED_ITEMS
@@ -25,10 +23,8 @@ services:
         value: postgres
       - key: PAYMENTS_ENABLED
         value: "true"
-      - key: MIDTRANS_IS_PRODUCTION
-        value: "false"
-      - key: MIDTRANS_LIVE_ENABLED
-        value: "false"
+      - key: IAQ_FULL_REPORT_PRICE_IDR
+        value: "50000"
       - key: IAQ_AI_ENABLED
         value: "false"
       - key: IAQ_ASSESSMENT_SOURCE
@@ -53,10 +49,6 @@ services:
         sync: false
       - key: SUPABASE_JWT_AUDIENCE
         value: authenticated
-      - key: MIDTRANS_SERVER_KEY
-        sync: false
-      - key: MIDTRANS_MERCHANT_ID
-        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM_ADDRESS

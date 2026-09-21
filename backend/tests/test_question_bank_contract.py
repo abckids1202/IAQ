@@ -10,6 +10,14 @@ def test_bank_has_120_candidates_per_domain_and_balanced_complete_forms():
     form = create_randomized_form("complete")
     assert len(form) == 48
     assert set(Counter(ITEMS[item_id]["domain"] for item_id in form).values()) == {8}
+    # Legacy links using quick mode must not silently produce a 12-question
+    # scored-looking assessment.
+    legacy_form = create_randomized_form("quick")
+    assert len(legacy_form) == 48
+    assert set(Counter(ITEMS[item_id]["domain"] for item_id in legacy_form).values()) == {8}
+    practice_form = create_randomized_form("practice")
+    assert len(practice_form) == 48
+    assert set(Counter(ITEMS[item_id]["domain"] for item_id in practice_form).values()) == {8}
 
 
 def test_student_item_payload_is_allowlisted():

@@ -15,7 +15,7 @@ directory, Python 3.12, `pip install -r requirements.txt`, and
 
 The Render template deliberately starts in production mode and leaves all
 provider secrets blank. The service will remain blocked by `/ready` until
-Postgres, Supabase Auth, reviewed items, Midtrans, Resend, CORS, and the
+Postgres, Supabase Auth, reviewed items, manual QRIS, Resend, CORS, and the
 application URL are configured. Do not change it to development mode on a
 public URL: seeded accounts and the fixed development OTP are for local smoke
 tests only.
@@ -27,10 +27,11 @@ tests only.
 - Set `IAQ_ACCESS_STORE=postgres` only after the order, entitlement, guardian-consent, and review repositories are wired to the migration tables. The current local access repository remains memory-backed and `/ready` reports it as a production blocker.
 - Replace `development_demo` auth with verified JWTs and server-side role checks.
 - Configure `IAQ_AUTH_MODE=supabase`, `SUPABASE_URL` or `SUPABASE_JWKS_URL`, and server-managed roles in Supabase `app_metadata`. Never accept role claims from untrusted user metadata in a production provisioning flow.
+- For staff MFA, enable TOTP in Supabase Authentication settings. Staff members open IAQ account security, choose “Set up Google Authenticator,” scan the one-time QR code (or enter the displayed setup key), verify the six-digit code, then sign out and back in so the refreshed Supabase `aal2` token reaches the API. IAQ does not store or log the TOTP secret.
 - Keep age safeguards server-owned: write the reviewed `age_band` to `app_metadata` or the IAQ profile service, and set `IAQ_REQUIRE_VERIFIED_AGE=true` before allowing scored adult sessions. User-editable Supabase `user_metadata` is not accepted for minor gating.
 - Restrict CORS to deployed origins and enforce TLS.
 - Set `IAQ_ALLOWED_ORIGINS` to the exact frontend origin; development localhost origins are not implicitly allowed in production.
-- Configure Midtrans production keys and enable `MIDTRANS_IS_PRODUCTION=true` plus `MIDTRANS_LIVE_ENABLED=true` only after merchant verification, refund rehearsal, privacy review, and signed-notification tests.
+- Configure private QRIS settings and the receipt-review workflow. Midtrans webhook fulfillment is disabled in this release.
 - Configure Resend with `RESEND_API_KEY`, a verified `EMAIL_FROM_ADDRESS`, and a real `APP_BASE_URL`. Delivery is idempotent by result/email and remains private to the result owner.
 - Add structured JSON logs without raw personal data.
 - Add rate limits to auth, response, export, deletion, and report endpoints.

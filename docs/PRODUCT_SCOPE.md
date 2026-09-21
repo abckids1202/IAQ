@@ -8,7 +8,7 @@ V1.0 is an experimental educational profile. It does not diagnose, rank, label d
 
 1. Student reviews consent and starts a cognitive baseline.
 2. The session records answers, timing, interruptions, and completion state.
-3. Server-side scoring produces seven relative domain signals and a provisional composite.
+3. Server-side scoring produces six relative domain signals and a provisional composite.
 4. Compass combines RIASEC-style interests with academic and activity evidence.
 5. Transparent matching shows fit, readiness, feasibility, confidence, reasons, and next evidence.
 6. Tracker stores dated profile snapshots and exploration progress.

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.domain import DOMAINS, classify_session_quality, major_fit, recommendation_confidence, score_domains, score_riasec
-from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseCreate, create_randomized_form, create_session, get_result, public_item, start_session, submit_response, submit_session
+from app.main import DURATION_SECONDS, ITEMS, SESSIONS, SessionCreate, ResponseCreate, create_randomized_form, create_session, get_result, public_item, start_session, submit_response, submit_session, begin_memory_recall
 
 
 def response_for_item(item_id: str, presented_order: int) -> ResponseCreate:
@@ -68,7 +68,7 @@ def test_experimental_iq_score_requires_complete_profile_and_uses_reference_tran
     assert result.composite == 100
     assert result.iq_score == 130
     assert result.iq_score_kind == "experimental_iq_style_estimate"
-    assert result.iq_score_scale == "100_mean_15_sd_reference_only"
+    assert result.iq_score_scale == "70_130_uncalibrated_reference"
 
 
 def test_quality_flags_rapid_and_interruptions():
@@ -116,6 +116,8 @@ def test_session_has_timed_contract_and_persists_real_metrics():
     assert session["question_count"] == 48
     started = start_session(session["id"])
     first = started["next_item"]
+    if first.get("type") == "memory":
+        begin_memory_recall(session["id"], first["id"])
     submit_response(session["id"], response_for_item(first["id"], 0), f"test:{session['id']}:0")
     result = submit_session(session["id"])
     assert result["answered_count"] == 1
@@ -141,6 +143,8 @@ def test_presented_order_is_bound_to_the_randomized_form():
 def test_minor_practice_is_ephemeral_and_unscored():
     session = create_session("iaq-cognitive", SessionCreate(mode="practice", age_band="15-17"))
     first = start_session(session["id"])["next_item"]
+    if first.get("type") == "memory":
+        begin_memory_recall(session["id"], first["id"])
     submit_response(session["id"], response_for_item(first["id"], 0), f"practice:{session['id']}")
     result = submit_session(session["id"])
     assert result["practice"] is True

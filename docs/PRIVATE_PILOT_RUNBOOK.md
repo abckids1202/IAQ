@@ -42,7 +42,7 @@ Before a real pilot, complete two independent reviews for at least 100 items per
 IAQ_REQUIRE_REVIEWED_ITEMS=true
 ```
 
-With that flag enabled, the API refuses forms until the review gate is met. The default local preview may use the legacy `status=PILOT` compatibility flag so the 56-question UI can be exercised before the review queue is complete; this fallback must not be used for real student data.
+With that flag enabled, the API refuses forms until the review gate is met. The default local preview may use the legacy `status=PILOT` compatibility flag so the 48-question UI can be exercised before the review queue is complete; this fallback must not be used for real student data.
 
 Run the seed idempotently after applying migrations:
 
@@ -55,13 +55,13 @@ The seed reports candidate counts, reviewed counts, and whether the 100-per-doma
 
 ## Payment, email, and minors
 
-- Payment defaults to mock settlement. Midtrans is configuration-gated and should remain sandbox-only until merchant verification, amount/signature/replay tests, refunds, and webhook rehearsal are complete.
+- Payment uses manual BCA QRIS proof review. The mock settlement endpoint is retained only as a local automated-test shortcut and is not available as a production payment path.
 - Email defaults to a development queue. Add `RESEND_API_KEY` only in a controlled environment and keep report delivery idempotent.
 - Ages 15–17 require a guardian email and a separate consent record before minor report delivery. Legal policy and operational review are still required before collecting real minor data.
 - Keep report visibility private. Do not create public result links or public score cards.
 
 ## Production checklist
 
-Before production, configure separate Supabase projects for local/staging/production, use `IAQ_AUTH_MODE=supabase`, run the migrations against Postgres, connect Vercel to the frontend and Render to the API, configure Resend and Midtrans, add monitoring and deletion/de-identification jobs, rehearse incident response, and complete privacy/legal review.
+Before production, configure separate Supabase projects for local/staging/production, use `IAQ_AUTH_MODE=supabase`, run the migrations against Postgres, connect Vercel to the frontend and Render to the API, configure Resend and the manual QRIS reviewer workflow, add monitoring and deletion/de-identification jobs, rehearse incident response, and complete privacy/legal review.
 
 The current implementation intentionally leaves the following as release gates: 100 reviewed eligible items per domain, real 200–500 participant pilot data, psychometric review, live provider credentials, production authentication, guardian policy approval, payment reconciliation, and security review.

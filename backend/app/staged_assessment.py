@@ -11,6 +11,7 @@ from typing import Any, Dict
 from urllib.parse import quote
 
 from . import external_data
+from .question_presentation import validate_matrix, verbal_question
 
 
 STAGED_DOMAINS = {
@@ -45,7 +46,7 @@ def _memory_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "construct_id": candidate.get("construct_id", "working_memory"),
         "domain": "working_memory",
         "type": "memory",
-        "prompt": "Recall what you studied in the correct format.",
+        "prompt": source.get("question") or "Recall the numbers in the same order.",
         "options": [],
         "answer": _canonical(answer),
         "explanation": candidate.get("rule") or "Compare the recalled response with the stored sequence or cell set.",
@@ -53,7 +54,10 @@ def _memory_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "memory_input_length": len(answer) if isinstance(answer, list) else 0,
         "memory_grid_size": stimulus.get("grid_size") if isinstance(stimulus, dict) else None,
         "memory_stimulus": stimulus,
-        "image_url": _asset_url(candidate),
+        # Static review images contain block-sequence labels. Render only the
+        # study stimulus, never an administrator's answer-bearing preview.
+        "image_url": None,
+        "memory_protocol_incomplete": isinstance(stimulus, dict) and "block_positions_normalized" in stimulus,
         "render_type": "external_image",
         "status": "DRAFT",
         "lifecycle_status": "DRAFT",
@@ -71,6 +75,17 @@ def _choice_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
     source = candidate.get("source_record") or {}
     options = source.get("options") if isinstance(source.get("options"), list) else []
     answer_index = source.get("answer_index")
+    matrix_visual = None
+    image_url = _asset_url(candidate)
+    if candidate.get("domain") == "abstract_reasoning":
+        try:
+            validate_matrix(source.get("stimulus"), options)
+        except ValueError:
+            # Do not fall back to an image with a known misplaced marker.
+            image_url = None
+        else:
+            matrix_visual = {"stimulus": source["stimulus"], "options": options}
+            image_url = f"/assessment-stimuli/{quote(candidate['id'], safe='')}.svg"
     is_visual = candidate.get("domain") in {"abstract_reasoning", "deductive_logic", "numerical_reasoning", "visual_spatial_reasoning"}
     if is_visual:
         # The supplied image is the complete visual stimulus. The main app
@@ -86,7 +101,7 @@ def _choice_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
         # the actual verbal question in the heading. The normalised prompt
         # also contains the context, which would otherwise duplicate it in
         # the student view.
-        prompt = candidate.get("question") or candidate.get("prompt") or "Choose the best answer."
+        prompt = verbal_question(candidate.get("question") or candidate.get("prompt"), candidate.get("context"))
     return {
         "id": candidate["id"],
         "item_family_id": candidate.get("item_family_id") or candidate["id"],
@@ -98,7 +113,8 @@ def _choice_item(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "options": safe_options,
         "answer": safe_answer,
         "explanation": candidate.get("rule"),
-        "image_url": _asset_url(candidate) if is_visual else None,
+        "image_url": image_url if is_visual else None,
+        "matrix_visual": matrix_visual,
         "render_type": "external_image" if is_visual else "choice",
         "status": "DRAFT",
         "lifecycle_status": "DRAFT",

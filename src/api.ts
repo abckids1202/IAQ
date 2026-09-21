@@ -11,6 +11,20 @@ const domainLabels: Record<string, Domain> = {
   visual_spatial_reasoning: 'Visual-spatial reasoning',
   working_memory: 'Working memory'
 }
+const domainLabelsId: Record<string, string> = {
+  abstract_reasoning: 'Penalaran abstrak',
+  deductive_logic: 'Logika deduktif',
+  numerical_reasoning: 'Penalaran numerik',
+  verbal_reasoning: 'Penalaran verbal',
+  visual_spatial_reasoning: 'Penalaran visual-spasial',
+  working_memory: 'Memori kerja'
+}
+const visualPromptsId: Record<string, string> = {
+  abstract_reasoning: 'Panel mana yang melengkapi pola?',
+  deductive_logic: 'Kesimpulan mana yang harus benar?',
+  numerical_reasoning: 'Pilihan mana yang melengkapi deret?',
+  visual_spatial_reasoning: 'Susunan mana yang sama setelah diputar?'
+}
 
 type ApiQuestion = { id: string; domain: string; type: Question['type']; prompt: string; options?: string[]; helper?: string; visual?: string[] | Record<string, unknown>; render_type?: string; render_parameters?: Record<string, unknown>; image_url?: string; presentation_mode?: 'visual_labels'; memory_response_type?: 'ordered_sequence' | 'cell_set'; memory_input_length?: number; memory_grid_size?: number; memory_recall_started?: boolean }
 type SessionStart = { id: string; deadline_at: string; duration_seconds: number; question_count: number; domain_quota: number; mode?: string; language?: string; practice?: boolean }
@@ -48,6 +62,18 @@ type ApiResult = {
   paywall?: { title: string; body: string; product_id: string }
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message) }
+}
+
+export class CompletedAssessment extends Error {
+  constructor(public result: AssessmentResult | PracticeCompletion) { super('Assessment completed') }
+}
+
+export class InvalidAssessmentSession extends Error {
+  constructor(message: string) { super(message); this.name = 'InvalidAssessmentSession' }
+}
+
 export async function request<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<T> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
@@ -56,7 +82,7 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = 8
     const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(sessionToken ? { 'X-IAQ-Session': sessionToken } : {}), ...(init?.headers || {}) } })
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as { detail?: string }
-      throw new Error(body.detail || `IAQ API ${response.status}`)
+      throw new ApiError(body.detail || `IAQ API ${response.status}`, response.status)
     }
     return await response.json() as T
   } finally {
@@ -71,9 +97,15 @@ function getBrowserSessionToken(): string | null {
   return localStorage.getItem('iaq-session-token') || localStorage.getItem('iaq-guest-token')
 }
 
+function displayLocale(): 'id' | 'en' {
+  return typeof window !== 'undefined' && localStorage.getItem('iaq-locale') !== 'en' ? 'id' : 'en'
+}
+
 function normalize(item: ApiQuestion): Question {
   const imageUrl = item.image_url ? (item.image_url.startsWith('http') ? item.image_url : `${API_BASE}${item.image_url}`) : undefined
-  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', type: item.type, prompt: item.prompt, options: item.options || [], helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters, imageUrl, presentationMode: item.presentation_mode, memoryResponseType: item.memory_response_type, memoryInputLength: item.memory_input_length, memoryGridSize: item.memory_grid_size, memoryRecallStarted: item.memory_recall_started }
+  const idLocale = displayLocale() === 'id'
+  const prompt = idLocale && visualPromptsId[item.domain] ? visualPromptsId[item.domain] : item.prompt
+  return { id: item.id, domain: domainLabels[item.domain] || 'Abstract reasoning', displayDomain: idLocale ? domainLabelsId[item.domain] : domainLabels[item.domain], type: item.type, prompt, options: item.options || [], helper: item.helper, visual: item.visual, renderType: item.render_type, renderParameters: item.render_parameters, imageUrl, presentationMode: item.presentation_mode, memoryResponseType: item.memory_response_type, memoryInputLength: item.memory_input_length, memoryGridSize: item.memory_grid_size, memoryRecallStarted: item.memory_recall_started }
 }
 
 function normalizeResult(result: ApiResult): AssessmentResult {
@@ -131,15 +163,24 @@ export async function startRandomizedAssessment(): Promise<{ sessionId: string; 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   await ensureGuestSession()
   const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
+  if (mode === 'complete' && session.question_count !== 48) {
+    throw new Error(`The scored assessment returned ${session.question_count} questions instead of 48.`)
+  }
   const started = await request<{ next_item: ApiQuestion }>(`/sessions/${session.id}/start`, { method: 'POST' })
   return { sessionId: session.id, question: normalize(started.next_item), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: 0, practice: Boolean(session.practice || mode === 'practice') }
 }
 
 export async function resumeRandomizedAssessment(sessionId: string): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   const session = await request<SessionSummary>(`/sessions/${sessionId}`)
+  if (!session.practice && session.question_count !== 48) {
+    throw new InvalidAssessmentSession(`The saved assessment has ${session.question_count} questions; a fresh 48-question assessment is required.`)
+  }
+  if (session.status === 'complete' || session.status === 'timed_out' || Date.parse(session.deadline_at) <= Date.now() || session.answered_count >= session.question_count) {
+    throw new CompletedAssessment(await finishAssessment(sessionId))
+  }
   await request<{ status: string }>(`/sessions/${sessionId}/start`, { method: 'POST' })
   const next = await request<ApiQuestion & { complete?: boolean; expired?: boolean }>(`/sessions/${sessionId}/next-item`)
-  if (next.expired || next.complete) throw new Error('This assessment session has ended.')
+  if (next.expired || next.complete) throw new CompletedAssessment(await finishAssessment(sessionId))
   return { sessionId, question: normalize(next), deadlineAt: session.deadline_at, durationSeconds: session.duration_seconds, questionCount: session.question_count, answeredCount: session.answered_count, practice: Boolean(session.practice || session.mode === 'practice') }
 }
 
@@ -193,8 +234,8 @@ export async function getInterestQuestionnaire(): Promise<{ items: InterestItem[
   return request('/questionnaires/compass-v1')
 }
 
-export async function getInterestResult(): Promise<InterestResult> {
-  return request('/me/interests')
+export async function getInterestResult(resultId?: string): Promise<InterestResult> {
+  return request(`/me/interests?result_id=${encodeURIComponent(resultId || '')}`)
 }
 
 export async function submitInterestResponses(responses: Record<string, number>, resultId?: string): Promise<InterestResult> {
@@ -266,6 +307,7 @@ export type Product = {
 
 export type Order = {
   id: string
+  result_id?: string
   order_number: string
   purchaser_user_id: string
   beneficiary_user_id: string
@@ -308,6 +350,7 @@ export async function verifyOtp(email: string, code: string): Promise<{ session_
   const result = await request<{ session_token: string; user: AccessUser; permissions: string[] }>('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email, code }) })
   localStorage.setItem('iaq-session-token', result.session_token)
   localStorage.setItem('iaq-user', JSON.stringify(result.user))
+  await claimGuestResult()
   localStorage.removeItem('iaq-guest-token')
   localStorage.removeItem('iaq-guest-user')
   return result
@@ -315,6 +358,41 @@ export async function verifyOtp(email: string, code: string): Promise<{ session_
 
 export function supabaseConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY)
+}
+
+function supabaseAccessToken(): string {
+  const token = localStorage.getItem('iaq-session-token')
+  if (!token) throw new Error('Sign in before setting up an authenticator.')
+  return token
+}
+
+async function supabaseAuthenticatedRequest<T>(path: string, body: Record<string, unknown> = {}): Promise<T> {
+  if (!supabaseConfigured()) throw new Error('Supabase Auth is not configured for this deployment.')
+  const response = await fetch(`${SUPABASE_URL}/auth/v1${path}`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${supabaseAccessToken()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({})) as { msg?: string; error_description?: string }
+    throw new Error(result.msg || result.error_description || `Supabase Auth ${response.status}`)
+  }
+  return response.json() as Promise<T>
+}
+
+export type TotpEnrollment = { id: string; type: 'totp'; friendly_name?: string; totp?: { qr_code?: string; secret?: string; uri?: string } }
+
+/** Uses Supabase Auth's TOTP factor API. The secret is shown once in the UI only. */
+export async function enrollSupabaseTotp(): Promise<TotpEnrollment> {
+  return supabaseAuthenticatedRequest<TotpEnrollment>('/factors', { factor_type: 'totp', friendly_name: 'IAQ authenticator' })
+}
+
+export async function challengeSupabaseTotp(factorId: string): Promise<{ id: string }> {
+  return supabaseAuthenticatedRequest<{ id: string }>(`/factors/${encodeURIComponent(factorId)}/challenge`)
+}
+
+export async function verifySupabaseTotp(factorId: string, challengeId: string, code: string): Promise<Record<string, unknown>> {
+  return supabaseAuthenticatedRequest<Record<string, unknown>>(`/factors/${encodeURIComponent(factorId)}/verify`, { challenge_id: challengeId, code })
 }
 
 async function supabaseRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -334,6 +412,7 @@ export async function requestSupabaseOtp(email: string): Promise<void> {
 export async function verifySupabaseOtp(email: string, code: string): Promise<{ access_token: string }> {
   const result = await supabaseRequest<{ access_token: string }>('/verify', { email, token: code, type: 'email' })
   localStorage.setItem('iaq-session-token', result.access_token)
+  await claimGuestResult()
   localStorage.removeItem('iaq-guest-token')
   localStorage.removeItem('iaq-guest-user')
   return result
@@ -366,6 +445,7 @@ export async function finishSupabaseCallback(): Promise<boolean> {
     const session = await result.json() as { access_token?: string }
     if (!session.access_token) throw new Error('Supabase returned no access token.')
     localStorage.setItem('iaq-session-token', session.access_token)
+    await claimGuestResult()
     localStorage.removeItem('iaq-guest-token')
     localStorage.removeItem('iaq-guest-user')
     localStorage.removeItem('iaq-supabase-pkce-verifier')
@@ -377,12 +457,23 @@ export async function finishSupabaseCallback(): Promise<boolean> {
   return false
 }
 
+async function claimGuestResult(): Promise<void> {
+  const guestToken = localStorage.getItem('iaq-guest-token')
+  const resultId = localStorage.getItem('iaq-last-result-id')
+  if (guestToken && resultId) {
+    await request('/results/claim', { method: 'POST', body: JSON.stringify({ guest_token: guestToken, result_id: resultId }) })
+  }
+}
+
 export async function logout(): Promise<void> {
   await request('/auth/logout', { method: 'POST' }).catch(() => undefined)
   localStorage.removeItem('iaq-session-token')
   localStorage.removeItem('iaq-user')
   localStorage.removeItem('iaq-guest-token')
   localStorage.removeItem('iaq-guest-user')
+  localStorage.removeItem('iaq-profile')
+  localStorage.removeItem('iaq-last-result-id')
+  localStorage.removeItem('iaq-active-assessment-session')
 }
 
 export async function getCurrentUser(): Promise<AccessUser> {
@@ -404,19 +495,19 @@ export async function listProducts(): Promise<Product[]> {
   return request<{ products: Product[] }>('/products').then((result) => result.products)
 }
 
-export async function createOrder(productId: string, beneficiaryUserId?: string): Promise<Order> {
-  return request<Order>('/orders', { method: 'POST', body: JSON.stringify({ product_id: productId, beneficiary_user_id: beneficiaryUserId }) })
+export async function createOrder(productId: string, resultId: string): Promise<Order> {
+  return request<Order>('/orders', { method: 'POST', body: JSON.stringify({ product_id: productId, result_id: resultId }) })
 }
 
 export type QRISInfo = { merchant_name: string; instructions: string; image_available: boolean; image_url?: string | null }
 export async function getQRISInfo(): Promise<QRISInfo> { return request<QRISInfo>('/payment-settings/qris') }
 export async function startManualCheckout(orderId: string): Promise<{ order: Order; payment_attempt: Record<string, unknown>; qris: QRISInfo; message: string }> { return request(`/orders/${orderId}/checkout`, { method: 'POST' }) }
-export async function submitPaymentProof(orderId: string, file: File, transactionRef?: string): Promise<{ accepted: boolean; id?: string; status: string }> {
+export async function submitPaymentProof(orderId: string, file: File, transactionRef?: string, idempotencyKey?: string): Promise<{ accepted: boolean; id?: string; status: string }> {
   const form = new FormData()
   form.append('receipt', file)
   if (transactionRef) form.append('transaction_ref', transactionRef)
   const token = localStorage.getItem('iaq-session-token') || localStorage.getItem('iaq-guest-token') || ''
-  const response = await fetch(`${API_BASE}/orders/${orderId}/payment-proof`, { method: 'POST', headers: { 'X-IAQ-Session': token, 'Idempotency-Key': `${orderId}:${file.name}:${file.size}` }, body: form })
+  const response = await fetch(`${API_BASE}/orders/${orderId}/payment-proof`, { method: 'POST', headers: { 'X-IAQ-Session': token, 'Idempotency-Key': idempotencyKey || crypto.randomUUID() }, body: form })
   if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `IAQ API ${response.status}`) }
   return response.json()
 }
