@@ -979,15 +979,51 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
         raise HTTPException(403, "The scored pilot is currently available only for ages 18–22")
     if payload.language == "id" and not any(item.get("language", "en") == "id" for item in ITEMS.values()):
         raise HTTPException(503, "The Indonesian assessment version is not released yet; choose English for this pilot")
-    access_code = "assessment.complete.start" if access.has_entitlement(user["id"], "assessment.complete.start") else "assessment.free.start"
-    if payload.mode != "practice" and not access.has_entitlement(user["id"], access_code):
+
+    def has_start_credit(code: str) -> bool:
+        if access.has_entitlement(user["id"], code):
+            return True
+        if PERSISTENCE:
+            try:
+                return any(item["code"] == code and item["status"] == "active" and item["remaining_quantity"] > 0 for item in PERSISTENCE.list_entitlements_for_user(user["id"]))
+            except Exception:
+                return False
+        return False
+
+    def owned_results() -> List[Dict[str, Any]]:
+        memory = [item for item in RESULTS.values() if item.get("user_id") == user["id"]]
+        if not PERSISTENCE:
+            return memory
+        try:
+            persisted = PERSISTENCE.list_results_for_user(user["id"])
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in memory}
+        return memory + [item for item in persisted if item["id"] not in known]
+
+    # A normal account receives one free scored attempt. A paid start credit
+    # (created by an approved report/reassessment purchase) explicitly allows
+    # another attempt. This rule is server-side and survives browser resets.
+    paid_start = has_start_credit("assessment.complete.start")
+    if payload.mode != "practice" and not user.get("is_guest") and owned_results() and not paid_start:
+        raise HTTPException(409, "This account has already completed its free assessment. Unlock another attempt to continue.")
+
+    access_code = "assessment.complete.start" if paid_start else "assessment.free.start"
+    if payload.mode != "practice" and not has_start_credit(access_code):
         raise HTTPException(402, "A free assessment start entitlement is required")
     session_id = str(uuid4())
     created_at = datetime.now(timezone.utc)
     deadline_at = created_at + timedelta(seconds=DURATION_SECONDS)
     item_order = create_randomized_form(payload.mode, payload.language)
     if payload.mode != "practice":
-        access.consume_entitlement(user["id"], access_code, session_id)
+        consumed = access.consume_entitlement(user["id"], access_code, session_id)
+        if not consumed and PERSISTENCE:
+            try:
+                consumed = PERSISTENCE.consume_entitlement(user["id"], access_code, session_id)
+            except Exception:
+                consumed = False
+        if not consumed:
+            raise HTTPException(409, "Assessment access could not be reserved. Please try again.")
     session = {"id": session_id, "assessment_id": assessment_id, "assessment_version": payload.assessment_version, "mode": payload.mode, "language": payload.language, "age_band": payload.age_band, "status": "created", "responses": {}, "item_order": item_order, "created_at": created_at.isoformat(), "deadline_at": deadline_at.isoformat(), "duration_seconds": DURATION_SECONDS, "user_id": user["id"], "access_code": access_code if payload.mode != "practice" else None, "consent_snapshot": {}, "ephemeral": payload.mode == "practice", "data_origin": "PRACTICE" if payload.mode == "practice" else "REAL_PILOT"}
     # Practice is intentionally held in process memory and never written to
     # the assessment/results tables.
@@ -1267,7 +1303,11 @@ def result_projection(result: Dict[str, Any], request: Optional[Request] = None,
         RESULT_IDENTITIES.pop(result["id"], None)
         identity = None
     if user.get("is_guest") and (not identity or identity.get("user_id") != user.get("id")):
-        return {"id": result["id"], "full_access": False, "identity_required": True, "domain_scores": {}, "domain_metrics": {}}
+        # The free score is the immediate outcome of the test. Identity is
+        # still requested for ownership, saving, and payment, but it must not
+        # block a guest from seeing the score they just earned.
+        allowed_guest = {"id", "session_id", "assessment_version", "score_version", "score_kind", "norm_version", "iq_score", "iq_score_kind", "iq_score_label", "iq_score_version", "iq_score_scale", "iq_score_method", "completed_at", "disclaimer", "official_iq_enabled", "confidence", "answered_count", "question_count", "duration_seconds"}
+        return {**{key: value for key, value in result.items() if key in allowed_guest}, "full_access": False, "identity_required": True, "paid_features_unlocked": False, "domain_scores": {}, "domain_metrics": {}}
     unlocked = has_full_report_access(user["id"], result["id"]) or "platform_admin" in user.get("roles", [])
     if unlocked:
         return {**result, "full_access": True, "paid_features_unlocked": True}
@@ -1339,6 +1379,24 @@ def submit_session(session_id: str, request: Request = None) -> Dict[str, Any]:
 
 def get_result(result_id: str, request: Optional[Request] = None) -> Dict[str, Any]:
     return result_projection(_result_record(result_id, request), request)
+
+
+@app.get("/results")
+def list_results(request: Request) -> Dict[str, Any]:
+    """List only the signed-in user's results; guests use an opaque result URL."""
+    user = current_user(request)
+    if user.get("is_guest"):
+        return {"results": []}
+    results = [item for item in RESULTS.values() if item.get("user_id") == user["id"]]
+    if PERSISTENCE:
+        try:
+            persisted = PERSISTENCE.list_results_for_user(user["id"])
+        except Exception:
+            persisted = []
+        known = {item["id"] for item in results}
+        results.extend(item for item in persisted if item["id"] not in known)
+    results.sort(key=lambda item: item.get("completed_at", ""), reverse=True)
+    return {"results": [result_projection(item, request) for item in results]}
 
 
 @app.get("/results/{result_id}")

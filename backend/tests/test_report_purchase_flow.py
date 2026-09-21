@@ -60,7 +60,7 @@ def test_guest_score_manual_payment_selected_report_and_verified_claim(monkeypat
     auth = headers(guest['session_token'])
     rid = complete(client, auth)
     hidden = client.get(f'/results/{rid}', headers=auth).json()
-    assert hidden['identity_required'] and 'iq_score' not in hidden
+    assert hidden['identity_required'] and hidden['iq_score'] == 130
     email = f'{uuid4().hex}@example.com'
     captured = client.post('/me/identity', json={'result_id': rid, 'email': email, 'display_name': 'Pilot Tester', 'age_band': '18-22', 'granted': True}, headers=auth)
     assert captured.status_code == 200

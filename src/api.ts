@@ -210,6 +210,11 @@ export async function getAssessmentResult(resultId: string): Promise<AssessmentR
   return normalizeResult(await request<ApiResult>(`/results/${resultId}`))
 }
 
+export async function listAssessmentResults(): Promise<AssessmentResult[]> {
+  const response = await request<{ results: ApiResult[] }>('/results')
+  return (response.results || []).map(normalizeResult)
+}
+
 export type ReportDelivery = {
   id: string
   result_id: string

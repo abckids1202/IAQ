@@ -253,6 +253,45 @@ class PostgresAssessmentStore:
                     for row in cursor.fetchall()
                 ]
 
+    def consume_entitlement(self, external_user_id: str, code: str, assessment_id: str) -> bool:
+        """Consume one start credit atomically in the durable store."""
+        user_db_id = self._db_user_id(external_user_id)
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE entitlements
+                    SET remaining_quantity = remaining_quantity - 1,
+                        status = CASE WHEN remaining_quantity - 1 <= 0 THEN 'consumed' ELSE 'active' END
+                    WHERE id = (
+                        SELECT id FROM entitlements
+                        WHERE owner_id = %s AND code = %s AND status = 'active' AND remaining_quantity > 0
+                        ORDER BY granted_at ASC
+                        FOR UPDATE SKIP LOCKED LIMIT 1
+                    )
+                    RETURNING id
+                    """,
+                    (user_db_id, code),
+                )
+                return cursor.fetchone() is not None
+
+    def list_results_for_user(self, external_user_id: str) -> List[Dict[str, Any]]:
+        """Return durable results owned by one external user, newest first."""
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT ar.id
+                    FROM assessment_results ar
+                    JOIN test_sessions ts ON ts.id = ar.session_id
+                    WHERE COALESCE(ts.external_user_id, ts.user_id::text) = %s
+                    ORDER BY ar.completed_at DESC
+                    """,
+                    (external_user_id,),
+                )
+                result_ids = [str(row[0]) for row in cursor.fetchall()]
+        return [result for result_id in result_ids if (result := self.get_result(result_id))]
+
     def store_entitlements_for_order(self, order: Dict[str, Any], codes: List[str], granted_by: Optional[str]) -> None:
         owner_db_id = self._db_user_id(str(order["beneficiary_user_id"]))
         grantor_db_id = self._db_user_id(str(granted_by)) if granted_by else None

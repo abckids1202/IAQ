@@ -53,6 +53,14 @@ def test_new_user_can_register_test_unlock_and_continue():
     assert result["domain_scores"] == {}
     assert "answered_count" not in result
 
+    # The free attempt is one-time per account, and the result is discoverable
+    # without relying on a browser-local result pointer.
+    repeat = client.post("/assessments/iaq-cognitive/sessions", json={"mode": "complete"}, headers=headers)
+    assert repeat.status_code == 409
+    history = client.get("/results", headers=headers)
+    assert history.status_code == 200
+    assert [item["id"] for item in history.json()["results"]] == [result_id]
+
     order_response = client.post("/orders", json={"product_id": "iaq-complete", "result_id": result_id}, headers=headers)
     assert order_response.status_code == 200
     order_id = order_response.json()["id"]
