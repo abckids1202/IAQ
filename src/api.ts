@@ -161,6 +161,13 @@ export async function startRandomizedAssessment(): Promise<{ sessionId: string; 
 }
 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
+  // The public start screen intentionally has no account or age gate. Its
+  // `unknown` age band is the guest flow, so do not let a stale development
+  // login token hijack the request and consume a signed-in user's entitlement.
+  if (mode === 'complete' && ageBand === 'unknown') {
+    localStorage.removeItem('iaq-session-token')
+    localStorage.removeItem('iaq-user')
+  }
   await ensureGuestSession()
   let session: SessionStart
   try {
