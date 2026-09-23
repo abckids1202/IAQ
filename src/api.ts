@@ -162,7 +162,20 @@ export async function startRandomizedAssessment(): Promise<{ sessionId: string; 
 
 export async function startAssessmentWithOptions(mode: 'complete' | 'practice', ageBand: '15-17' | '18-22' | 'adult' | 'unknown', language: 'en' | 'id' = 'en'): Promise<{ sessionId: string; question: Question; deadlineAt: string; durationSeconds: number; questionCount: number; answeredCount: number; practice: boolean }> {
   await ensureGuestSession()
-  const session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
+  let session: SessionStart
+  try {
+    session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
+  } catch (error) {
+    // A development server restart can invalidate an old guest token. Renew
+    // that unsigned visitor session once instead of showing an entitlement
+    // error for a brand-new test.
+    if (error instanceof ApiError && [401, 402, 403].includes(error.status) && !localStorage.getItem('iaq-session-token')) {
+      localStorage.removeItem('iaq-guest-token')
+      localStorage.removeItem('iaq-guest-user')
+      await requestGuestSession()
+      session = await request<SessionStart>('/assessments/iaq-cognitive/sessions', { method: 'POST', body: JSON.stringify({ assessment_version: 'IAQ-COG-0.4', mode, age_band: ageBand, language }) })
+    } else throw error
+  }
   if (mode === 'complete' && session.question_count !== 40) {
     throw new Error(`The scored assessment returned ${session.question_count} questions instead of 40.`)
   }
@@ -485,7 +498,7 @@ export async function getCurrentUser(): Promise<AccessUser> {
   return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
 }
 
-export async function captureIdentity(payload: { result_id?: string; email: string; display_name: string; age_band: '15-17' | '18-22' | 'adult' | 'unknown'; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
+export async function captureIdentity(payload: { result_id?: string; email: string; age?: number; age_band?: '15-17' | '18-22' | 'adult' | 'unknown'; display_name?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
   const result = await request<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }>('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
   if (result.session_token) {
     localStorage.setItem('iaq-session-token', result.session_token)

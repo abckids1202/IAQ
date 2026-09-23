@@ -347,7 +347,7 @@ function DomainExplorer() {
   return <section className="domain-explorer" aria-labelledby="domain-explorer-title"><div className="domain-explorer-head"><div><span className="eyebrow">What you will work through</span><h2 id="domain-explorer-title">Six ways of thinking.</h2><p>Each area contributes eight questions to the same private profile.</p></div><span className="explorer-count">06 areas / 08 each</span></div><div className="domain-explorer-layout"><div className="domain-tabs" role="tablist" aria-label="Assessment domains">{domains.map((domain, index) => <button key={domain} id={`domain-tab-${domainMeta[domain].short.toLowerCase()}`} role="tab" type="button" aria-selected={selected === domain} aria-controls={`domain-panel-${domainMeta[domain].short.toLowerCase()}`} tabIndex={selected === domain ? 0 : -1} className={`domain-tab ${selected === domain ? 'active' : ''}`} onClick={() => setSelected(domain)} onKeyDown={(event) => selectFromKeyboard(index, event)}><span className="domain-tab-number">0{index + 1}</span><span><strong>{domain}</strong><small>{domainMeta[domain].description}</small></span><b aria-hidden="true">→</b></button>)}</div><div className={`domain-preview domain-preview-${domainMeta[selected].tone}`} role="tabpanel" id={panelId} aria-labelledby={`domain-tab-${domainMeta[selected].short.toLowerCase()}`}><div className="domain-preview-head"><span className="preview-label">Illustrative preview · not scored</span><span className="preview-domain">{selected}</span></div><h3>{preview.task}</h3><p>{preview.detail}</p><div className="domain-preview-visual"><DomainPreviewVisual kind={preview.visual} /></div><div className="domain-preview-foot"><span>One of six areas</span><span>Results show patterns, not a verdict.</span></div></div></div><p className="domain-explorer-note"><span className="notice-icon">i</span> The assessment uses reviewed items selected from the question bank. These examples explain the task types; they are not live questions.</p></section>
 }
 
-function AssessLanding() {
+function LegacyAssessLanding() {
   const { t } = useI18n()
   const navigate = useNavigate()
   // The public scored pilot is 18–22. Ignore stale practice-mode values in
@@ -365,6 +365,18 @@ function AssessLanding() {
     navigate(`/assess/session?mode=${mode}&age_band=18-22&language=${assessmentLanguage}`)
   }
   return <div className="page assess-page"><section className="assessment-prep-intro"><div><div className="eyebrow">IAQ / timed assessment</div><h1>{t('navTest')}.<br /><em>{t('seeHowYouThink')}</em></h1><p>One focused session. A clear visual report as soon as you finish.</p></div><Link to="/methodology" className="text-button prep-method-link">{t('publicHow')} ↗</Link></section><div className="assessment-prep-grid"><DomainExplorer /><aside className="assessment-session-summary panel"><span className="eyebrow">Your session</span><h2>Ready when you are.</h2><p className="summary-lede">Find a quiet place and give yourself enough time to think carefully.</p><div className="session-facts"><div><strong>35</strong><span>minutes</span></div><div><strong>40</strong><span>questions</span></div><div><strong>8</strong><span>per area</span></div></div><div className="prep-guidance"><strong>{t('chooseAge')}</strong><label className="age-choice"><span>Age group</span><select value={ageBand} onChange={(event) => { setAgeBand(event.target.value); setStartError('') }}><option value="">Select one</option><option value="18-22">{t('adultPilot')}</option><option value="15-17">{t('minorPractice')}</option></select></label><p className="field-note">{t('englishAssessment')}. {t('indonesianBankPending')}</p>{ageBand === '15-17' && <p className="field-note">{t('practiceOnly')}</p>}<p>The clock keeps running after a refresh or if you leave. Your place is saved, but time is not extended.</p></div><button type="button" onClick={start} className="button primary full">{ageBand === '15-17' ? 'Start practice' : t('startTest')} <span>→</span></button>{startError && <span className="form-status" role="alert">{startError}</span>}<span className="session-footnote">Your result is private, provisional, and for within-profile reflection.</span></aside><section className="report-preview panel"><div><span className="eyebrow">After the test</span><h2>Your report puts the evidence first.</h2><p>See all six domain scores sorted against your own average, with accuracy and timing context for each area.</p></div><div className="report-preview-bars" aria-label="Illustrative report bar chart"><span className="report-average-label">your average</span>{domains.map((domain, index) => <div key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${[76, 62, 69, 57, 83, 65][index]}%` }} /></i></div>)}</div><span className="report-preview-note">Illustrative shape only — no score is shown before you complete the assessment.</span></section></div></div>
+}
+
+function AssessLanding() {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const [startError, setStartError] = useState('')
+  const start = () => {
+    setStartError('')
+    localStorage.setItem('iaq-age-band', 'unknown')
+    navigate('/assess/session?mode=complete&age_band=unknown&language=en')
+  }
+  return <div className="page assess-page"><section className="assessment-prep-intro"><div><div className="eyebrow">IAQ / timed assessment</div><h1>{t('navTest')}.<br /><em>{t('seeHowYouThink')}</em></h1><p>Start first. We’ll ask for your age and email after you finish.</p></div><Link to="/methodology" className="text-button prep-method-link">{t('publicHow')} ↗</Link></section><div className="assessment-prep-grid"><DomainExplorer /><aside className="assessment-session-summary panel"><span className="eyebrow">Your session</span><h2>Ready when you are.</h2><p className="summary-lede">40 questions, 35 minutes, and one clear result after you finish.</p><div className="session-facts"><div><strong>35</strong><span>minutes</span></div><div><strong>40</strong><span>questions</span></div><div><strong>8</strong><span>per area</span></div></div><div className="prep-guidance"><p>Press start to begin. After submission, we’ll ask for your exact age and email before showing your general IQ score.</p><p>The clock continues after refresh or leaving the test.</p></div><button type="button" onClick={start} className="button primary full">{t('startTest')} <span>→</span></button>{startError && <span className="form-status" role="alert">{startError}</span>}<span className="session-footnote">Your result is private and shown after completion.</span></aside></div></div>
 }
 
 function LegacyAssessment({ onComplete }: { onComplete: (scores: Record<Domain, number>) => void }) {
@@ -667,7 +679,7 @@ function AIInterpretationCard({ resultId }: { resultId: string }) {
   return <section className="panel ai-insight-card"><div className="panel-top"><div><div className="eyebrow">Optional AI reading</div><h2>Put the result into plain language.</h2></div><span className="mono-label">AI_ASSISTED / NOT SCORING</span></div><p className="muted">The score already comes from IAQ’s deterministic scorer. This optional layer only explains the evidence and suggests a careful next step.</p>{status === 'ready' && interpretation ? <div className="ai-insight-grid"><div><strong>What stands out</strong>{interpretation.narrative.what_stands_out.map((item) => <p key={item}>• {item}</p>)}</div><div><strong>Where to look for more evidence</strong>{interpretation.narrative.where_more_evidence.map((item) => <p key={item}>• {item}</p>)}</div><div><strong>Timing context</strong><p>{interpretation.narrative.timing_context}</p></div><div><strong>One next step</strong><p>{interpretation.narrative.next_step}</p></div></div> : <button className="button secondary" onClick={generate} disabled={status === 'loading'}>{status === 'loading' ? 'Preparing a careful read…' : 'Generate my plain-language read'} <span>→</span></button>}{status === 'unavailable' && <p className="ai-status" role="status">{message}</p>}<small className="ai-boundary">AI output is advisory, provisional, and never changes your score.</small></section>
 }
 
-function IdentityCaptureCard({ resultId, onComplete }: { resultId: string; onComplete: () => void }) {
+function LegacyIdentityCaptureCard({ resultId, onComplete }: { resultId: string; onComplete: () => void }) {
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [ageBand, setAgeBand] = useState<'15-17' | '18-22' | 'adult' | 'unknown'>('18-22')
@@ -688,6 +700,24 @@ function IdentityCaptureCard({ resultId, onComplete }: { resultId: string; onCom
     }
   }
   return <section className="panel identity-capture-card"><div className="eyebrow">One last step before your score</div><h2>Tell us who should own this private result.</h2><p>We need a display name, email, age band, and pilot consent before releasing the saved report. This scored pilot is currently for ages 18–22.</p><form onSubmit={submit} className="report-delivery-form"><label>Name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required placeholder="Your name" /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="you@example.com" /></label><label>Age band<select value={ageBand} onChange={(event) => setAgeBand(event.target.value as typeof ageBand)}><option value="18-22">18–22</option></select></label><label className="consent-check"><input type="checkbox" checked={granted} onChange={(event) => setGranted(event.target.checked)} required /> I agree to the IAQ pilot data notice and private result rules.</label><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Continue to my result'} <span>→</span></button>{status && <p className="report-status" role="alert">{status}</p>}</form></section>
+}
+
+function IdentityCaptureCard({ resultId, onComplete }: { resultId: string; onComplete: () => void }) {
+  const [email, setEmail] = useState('')
+  const [age, setAge] = useState('')
+  const [granted, setGranted] = useState(false)
+  const [status, setStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const exactAge = Number(age)
+    if (!Number.isInteger(exactAge) || exactAge < 13 || exactAge > 120) { setStatus('Enter your age as a whole number between 13 and 120.'); return }
+    setSaving(true); setStatus('')
+    try { await captureIdentity({ result_id: resultId, email, age: exactAge, display_name: 'IAQ student', granted }); onComplete() }
+    catch (error) { setStatus(error instanceof Error ? error.message : 'We could not save your details yet.') }
+    finally { setSaving(false) }
+  }
+  return <section className="panel identity-capture-card"><div className="eyebrow">One last step before your score</div><h2>Tell us your age and email.</h2><p>Your test is complete. Enter your exact age and email to view your general IAQ IQ score and continue to the report options.</p><form onSubmit={submit} className="report-delivery-form"><label>Age<input type="number" min="13" max="120" value={age} onChange={(event) => setAge(event.target.value)} required placeholder="Your age" /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="you@example.com" autoComplete="email" /></label><label className="consent-check"><input type="checkbox" checked={granted} onChange={(event) => setGranted(event.target.checked)} required /> I agree to the IAQ pilot data notice and private result rules.</label><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Show my IQ score'} <span>→</span></button>{status && <p className="report-status" role="alert">{status}</p>}</form></section>
 }
 
 function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {

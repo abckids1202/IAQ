@@ -243,8 +243,9 @@ class ConsentRecordCreate(BaseModel):
 class IdentityCaptureCreate(BaseModel):
     result_id: Optional[str] = Field(default=None, min_length=8, max_length=80)
     email: str = Field(min_length=5, max_length=254)
-    display_name: str = Field(min_length=2, max_length=120)
-    age_band: str = Field(pattern="^(15-17|18-22|adult|unknown)$")
+    display_name: str = Field(default="IAQ student", min_length=2, max_length=120)
+    age: Optional[int] = Field(default=None, ge=13, le=120)
+    age_band: Optional[str] = Field(default=None, pattern="^(15-17|18-22|adult|unknown)$")
     consent_version: str = Field(default="PILOT-DATA-1.0", min_length=1, max_length=80)
     granted: bool = True
     guardian_email: Optional[str] = Field(default=None, max_length=254)
@@ -972,10 +973,8 @@ def create_session(assessment_id: str, payload: SessionCreate, request: Request 
     # production identity claim.
     if os.getenv("IAQ_AUTH_MODE", "development").lower() == "development" and os.getenv("IAQ_REQUIRE_VERIFIED_AGE", "false").lower() != "true":
         trusted_age_band = payload.age_band
-    if (payload.age_band == "15-17" or trusted_age_band == "15-17") and payload.mode != "practice":
-        raise HTTPException(403, "People aged 15–17 can use practice mode until guardian consent is available")
-    if payload.mode != "practice" and payload.age_band != "18-22":
-        raise HTTPException(403, "The scored pilot is currently available only for ages 18–22")
+    # Age is collected after the test; never route a new visitor into an
+    # unscored practice session based on a pre-test classification.
     if payload.language == "id" and not any(item.get("language", "en") == "id" for item in ITEMS.values()):
         raise HTTPException(503, "The Indonesian assessment version is not released yet; choose English for this pilot")
 
@@ -1459,18 +1458,19 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         raise HTTPException(422, "Enter a valid email address")
     if not payload.granted:
         raise HTTPException(400, "Pilot data consent is required before releasing the result")
-    if payload.age_band != "18-22":
-        raise HTTPException(403, "Only the 18–22 scored pilot flow can release a saved result")
+    if payload.age is None and not payload.age_band:
+        raise HTTPException(422, "Enter your age to view the result")
+    resolved_age_band = payload.age_band or ("15-17" if payload.age is not None and payload.age < 18 else "18-22")
     user = current_user(request)
     was_guest = bool(user.get("is_guest"))
     if payload.result_id:
         _result_record(payload.result_id, request)
     if was_guest:
-        access.promote_guest_to_student(user, payload.email, payload.display_name, payload.age_band)
+        access.promote_guest_to_student(user, payload.email, payload.display_name, resolved_age_band)
     else:
         user["email"] = payload.email.strip().lower()
         user["display_name"] = payload.display_name.strip()
-        user["age_band"] = payload.age_band
+        user["age_band"] = resolved_age_band
     if PERSISTENCE:
         PERSISTENCE.store_identity(user["id"], user["email"], user["display_name"], user["age_band"], payload.consent_version, payload.granted)
     if payload.result_id:
@@ -1478,15 +1478,15 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         if result.get("user_id") != user["id"]:
             raise HTTPException(404, "Result not found")
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-        identity = {"user_id": user["id"], "email": user["email"], "display_name": user["display_name"], "age_band": user["age_band"], "consent_version": payload.consent_version, "captured_at": NOW(), "expires_at": expires_at}
+        identity = {"user_id": user["id"], "email": user["email"], "display_name": user["display_name"], "age": payload.age, "age_band": user["age_band"], "consent_version": payload.consent_version, "captured_at": NOW(), "expires_at": expires_at}
         RESULT_IDENTITIES[payload.result_id] = identity
         if PERSISTENCE and was_guest:
             token = _header_token(request)
             if token:
                 PERSISTENCE.store_guest_identity(payload.result_id, user["id"], token, user["email"], user["display_name"], user["age_band"], payload.consent_version, expires_at)
-    access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age_band": payload.age_band, "consent_version": payload.consent_version})
+    access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age": payload.age, "consent_version": payload.consent_version})
     guardian = None
-    if payload.age_band == "15-17":
+    if payload.age is not None and payload.age < 18:
         if not payload.guardian_email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email):
             raise HTTPException(422, "A guardian email is required for ages 15–17")
         guardian = create_guardian_consent(GuardianConsentCreate(guardian_email=payload.guardian_email, consent_version=payload.consent_version), request)
