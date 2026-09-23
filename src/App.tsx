@@ -703,8 +703,10 @@ function LegacyIdentityCaptureCard({ resultId, onComplete }: { resultId: string;
 }
 
 function IdentityCaptureCard({ resultId, onComplete }: { resultId: string; onComplete: () => void }) {
+  const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [age, setAge] = useState('')
+  const [guardianEmail, setGuardianEmail] = useState('')
   const [granted, setGranted] = useState(false)
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
@@ -713,11 +715,12 @@ function IdentityCaptureCard({ resultId, onComplete }: { resultId: string; onCom
     const exactAge = Number(age)
     if (!Number.isInteger(exactAge) || exactAge < 13 || exactAge > 120) { setStatus('Enter your age as a whole number between 13 and 120.'); return }
     setSaving(true); setStatus('')
-    try { await captureIdentity({ result_id: resultId, email, age: exactAge, display_name: 'IAQ student', granted }); onComplete() }
+    try { await captureIdentity({ result_id: resultId, email, age: exactAge, display_name: displayName, guardian_email: exactAge < 18 ? guardianEmail : undefined, granted }); onComplete() }
     catch (error) { setStatus(error instanceof Error ? error.message : 'We could not save your details yet.') }
     finally { setSaving(false) }
   }
-  return <section className="panel identity-capture-card"><div className="eyebrow">One last step before your score</div><h2>Tell us your age and email.</h2><p>Your test is complete. Enter your exact age and email to view your general IAQ IQ score and continue to the report options.</p><form onSubmit={submit} className="report-delivery-form"><label>Age<input type="number" min="13" max="120" value={age} onChange={(event) => setAge(event.target.value)} required placeholder="Your age" /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="you@example.com" autoComplete="email" /></label><label className="consent-check"><input type="checkbox" checked={granted} onChange={(event) => setGranted(event.target.checked)} required /> I agree to the IAQ pilot data notice and private result rules.</label><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Show my IQ score'} <span>→</span></button>{status && <p className="report-status" role="alert">{status}</p>}</form></section>
+  const minor = Number(age) >= 13 && Number(age) < 18
+  return <section className="panel identity-capture-card"><div className="eyebrow">One last step before your score</div><h2>Tell us about yourself.</h2><p>Your test is complete. Enter your name, exact age, and email to view your general IAQ IQ score and continue to the report options.</p><form onSubmit={submit} className="report-delivery-form"><label>Name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required placeholder="Your name" autoComplete="name" /></label><label>Age<input type="number" min="13" max="120" value={age} onChange={(event) => setAge(event.target.value)} required placeholder="Your age" /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="you@example.com" autoComplete="email" /></label>{minor && <><p className="field-note">Because you are under 18, a parent or guardian must approve saving this result.</p><label>Parent or guardian email<input type="email" value={guardianEmail} onChange={(event) => setGuardianEmail(event.target.value)} required placeholder="guardian@example.com" autoComplete="email" /></label></>}<label className="consent-check"><input type="checkbox" checked={granted} onChange={(event) => setGranted(event.target.checked)} required /> I agree to the IAQ data notice and private result rules.</label><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Show my IQ score'} <span>→</span></button>{status && <p className="report-status" role="alert">{status}</p>}</form></section>
 }
 
 function Results({ profile }: { profile: Profile; savedMajors: string[]; toggleMajor: (name: string) => void }) {

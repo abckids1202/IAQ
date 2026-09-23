@@ -505,7 +505,7 @@ export async function getCurrentUser(): Promise<AccessUser> {
   return request<AccessUser>('/me').then((user) => ({ ...user, display_name: user.display_name || (user as AccessUser & { name?: string }).name || 'IAQ user' }))
 }
 
-export async function captureIdentity(payload: { result_id?: string; email: string; age?: number; age_band?: '15-17' | '18-22' | 'adult' | 'unknown'; display_name?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
+export async function captureIdentity(payload: { result_id?: string; email: string; age?: number; age_band?: '15-17' | '18-22' | 'adult' | 'unknown'; display_name?: string; guardian_email?: string; granted: boolean }): Promise<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }> {
   const result = await request<{ user: AccessUser; consent_version: string; result_id?: string; guardian_consent?: { id: string; status: string }; session_token?: string | null }>('/me/identity', { method: 'POST', body: JSON.stringify({ ...payload, consent_version: 'PILOT-DATA-1.0' }) })
   if (result.session_token) {
     localStorage.setItem('iaq-session-token', result.session_token)

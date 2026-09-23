@@ -1460,6 +1460,8 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
         raise HTTPException(400, "Pilot data consent is required before releasing the result")
     if payload.age is None and not payload.age_band:
         raise HTTPException(422, "Enter your age to view the result")
+    if payload.age is not None and payload.age < 18 and (not payload.guardian_email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email)):
+        raise HTTPException(422, "A parent or guardian email is required for ages under 18")
     resolved_age_band = payload.age_band or ("15-17" if payload.age is not None and payload.age < 18 else "18-22")
     user = current_user(request)
     was_guest = bool(user.get("is_guest"))
@@ -1487,8 +1489,6 @@ def capture_identity(payload: IdentityCaptureCreate, request: Request) -> Dict[s
     access.record_audit(user["id"], "pilot.identity_captured", "profile", user["id"], {"age": payload.age, "consent_version": payload.consent_version})
     guardian = None
     if payload.age is not None and payload.age < 18:
-        if not payload.guardian_email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", payload.guardian_email):
-            raise HTTPException(422, "A guardian email is required for ages 15–17")
         guardian = create_guardian_consent(GuardianConsentCreate(guardian_email=payload.guardian_email, consent_version=payload.consent_version), request)
     # Supplying an email is not authentication. Keep the opaque guest token
     # until verified sign-in explicitly claims this result.
