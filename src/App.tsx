@@ -350,17 +350,19 @@ function DomainExplorer() {
 function AssessLanding() {
   const { t } = useI18n()
   const navigate = useNavigate()
-  const [ageBand, setAgeBand] = useState(() => localStorage.getItem('iaq-age-band') || '')
+  // The public scored pilot is 18–22. Ignore stale practice-mode values in
+  // localStorage so the launch flow always creates a real scored session.
+  const [ageBand, setAgeBand] = useState('18-22')
   const [startError, setStartError] = useState('')
   const start = () => {
     if (!ageBand) { setStartError(t('ageRequired')); return }
     localStorage.setItem('iaq-age-band', ageBand)
-    const mode = ageBand === '15-17' ? 'practice' : 'complete'
+    const mode = 'complete'
     // The application defaults to Indonesian. The scored bank currently has
     // English item versions only, so keep the assessment request explicit
     // until the separately authored Indonesian bank is released.
     const assessmentLanguage = 'en'
-    navigate(`/assess/session?mode=${mode}&age_band=${ageBand}&language=${assessmentLanguage}`)
+    navigate(`/assess/session?mode=${mode}&age_band=18-22&language=${assessmentLanguage}`)
   }
   return <div className="page assess-page"><section className="assessment-prep-intro"><div><div className="eyebrow">IAQ / timed assessment</div><h1>{t('navTest')}.<br /><em>{t('seeHowYouThink')}</em></h1><p>One focused session. A clear visual report as soon as you finish.</p></div><Link to="/methodology" className="text-button prep-method-link">{t('publicHow')} ↗</Link></section><div className="assessment-prep-grid"><DomainExplorer /><aside className="assessment-session-summary panel"><span className="eyebrow">Your session</span><h2>Ready when you are.</h2><p className="summary-lede">Find a quiet place and give yourself enough time to think carefully.</p><div className="session-facts"><div><strong>35</strong><span>minutes</span></div><div><strong>40</strong><span>questions</span></div><div><strong>8</strong><span>per area</span></div></div><div className="prep-guidance"><strong>{t('chooseAge')}</strong><label className="age-choice"><span>Age group</span><select value={ageBand} onChange={(event) => { setAgeBand(event.target.value); setStartError('') }}><option value="">Select one</option><option value="18-22">{t('adultPilot')}</option><option value="15-17">{t('minorPractice')}</option></select></label><p className="field-note">{t('englishAssessment')}. {t('indonesianBankPending')}</p>{ageBand === '15-17' && <p className="field-note">{t('practiceOnly')}</p>}<p>The clock keeps running after a refresh or if you leave. Your place is saved, but time is not extended.</p></div><button type="button" onClick={start} className="button primary full">{ageBand === '15-17' ? 'Start practice' : t('startTest')} <span>→</span></button>{startError && <span className="form-status" role="alert">{startError}</span>}<span className="session-footnote">Your result is private, provisional, and for within-profile reflection.</span></aside><section className="report-preview panel"><div><span className="eyebrow">After the test</span><h2>Your report puts the evidence first.</h2><p>See all six domain scores sorted against your own average, with accuracy and timing context for each area.</p></div><div className="report-preview-bars" aria-label="Illustrative report bar chart"><span className="report-average-label">your average</span>{domains.map((domain, index) => <div key={domain}><span>{domainMeta[domain].short}</span><i><b className={domainMeta[domain].tone} style={{ width: `${[76, 62, 69, 57, 83, 65][index]}%` }} /></i></div>)}</div><span className="report-preview-note">Illustrative shape only — no score is shown before you complete the assessment.</span></section></div></div>
 }
